@@ -1,5 +1,37 @@
 # AI NL to Refined Gaussian Splats
 
+## Baseline pipeline (Layer 0)
+
+From the repository root, run the orchestrator so each job writes under `runs/<run_id>/` with logs, metadata, and stable subpaths.
+
+**Interactive pick** (no path typing): omits `--video` and lists files in `Videos_Dataset/`; enter a number to continue:
+
+```bash
+python3 -m pipeline.run_pipeline
+```
+
+**Explicit path**:
+
+```bash
+python3 -m pipeline.run_pipeline --video Videos_Dataset/your_clip.mp4
+```
+
+**Another folder for the picker**: `--dataset-dir /path/to/clips` (still omit `--video` to get the menu).
+
+Layout per run:
+
+| Path | Purpose |
+|------|---------|
+| `input/input.mp4` | Canonical copy of the source video |
+| `images/` then `source/` | Extracted frames (COLMAP renames `images` → `source`) |
+| `distorted/`, `sparse/0/` | COLMAP database and model |
+| `colmap_run.log` | COLMAP stage log |
+| `metadata/run_metadata.json` | Run config, stage timings, resolved paths |
+| `logs/pipeline.log` | Orchestrator log |
+| `outputs/splat/` | Place for exported `.ply` (Brush or manual) |
+
+After COLMAP, the pipeline **runs Brush headless by default** when `brush/target/release/brush_app` exists (dataset = the run folder: `images/` + `sparse/0/`). Exports go to `runs/<id>/outputs/splat/`. Flags: `--skip-brush`, `--brush-binary PATH`, `--brush-total-steps N` (default 8000; use 30000 for a full-quality run). If `brush_app` is missing, the Brush stage is skipped with a log message and COLMAP outputs are kept. Lower-level scripts remain in `scripts/`.
+
 ## COLMAP (local copy, not in Git)
 
 This repository does not include the COLMAP sources on GitHub. If you need a full tree next to the project (for example `colmap-4.0.3/`), obtain it yourself using one of the options below.
