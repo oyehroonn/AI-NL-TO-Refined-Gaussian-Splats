@@ -1,0 +1,4 @@
+# Local third-party trees (large). See README.md for how to obtain them.
+brush/
+colmap/
+colmap-*/
