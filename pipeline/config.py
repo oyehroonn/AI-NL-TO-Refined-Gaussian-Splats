@@ -48,6 +48,19 @@ class PipelineConfig:
     # Passed to brush_app --total-steps; export fires at this interval once (= one final PLY).
     brush_total_steps: int = 8000
 
+    # ── Layer 2: frame quality scoring and keyframe selection ──────────────
+    run_layer2: bool = True
+    # Laplacian variance floor; frames below are blurry and rejected
+    blur_threshold: float = 80.0
+    # Exposure score floor [0,1]; frames below are over/under-exposed
+    exposure_threshold: float = 0.15
+    # dHash Hamming distance; frames closer than this to a kept frame are dropped
+    hamming_threshold: int = 8
+    # Motion score floor; frames below are near-static (redundant viewpoint)
+    motion_floor: float = 0.03
+    # Safety: relax thresholds if too few frames would survive
+    min_keep_frames: int = 30
+
     def validate(self) -> None:
         if self.matcher_type not in ("sequential_matcher", "exhaustive_matcher"):
             raise ValueError(f"Invalid matcher_type: {self.matcher_type}")

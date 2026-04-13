@@ -36,6 +36,12 @@ if str(_ROOT / "scripts") not in sys.path:
 import run_glomap  # noqa: E402
 import video_to_demo_frames  # noqa: E402
 
+# Layer 2 lives under scripts/layer2/
+_LAYER2_ROOT = _ROOT / "scripts"
+if str(_LAYER2_ROOT) not in sys.path:
+    sys.path.insert(0, str(_LAYER2_ROOT))
+from layer2.run_layer2 import run_layer2  # noqa: E402
+
 from .config import PipelineConfig, default_brush_app_binary, repo_root  # noqa: E402
 
 VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"})
@@ -293,6 +299,13 @@ def run_pipeline(
             "brush_binary": str(cfg.brush_binary) if cfg.brush_binary else None,
             "brush_total_steps": cfg.brush_total_steps,
             "brush_headless": cfg.brush_headless,
+            # Layer 2
+            "run_layer2": cfg.run_layer2,
+            "blur_threshold": cfg.blur_threshold,
+            "exposure_threshold": cfg.exposure_threshold,
+            "hamming_threshold": cfg.hamming_threshold,
+            "motion_floor": cfg.motion_floor,
+            "min_keep_frames": cfg.min_keep_frames,
         },
         "paths": {
             "repo_root": str(_ROOT),
@@ -367,8 +380,31 @@ def run_pipeline(
     metadata["paths"]["frames_dir"] = str((run_dir / "images").resolve())
     write_metadata(meta_path, metadata)
 
-    # 2) COLMAP expects the folder named images/ initially (then renames to source/).
+    # 1b) Layer 2: frame quality scoring and keyframe selection.
     images_dir = run_dir / "images"
+    if cfg.run_layer2:
+        def _layer2():
+            return run_layer2(
+                images_dir,
+                blur_threshold=cfg.blur_threshold,
+                exposure_threshold=cfg.exposure_threshold,
+                hamming_threshold=cfg.hamming_threshold,
+                motion_floor=cfg.motion_floor,
+                min_keep_frames=cfg.min_keep_frames,
+                verbose=True,
+            )
+        _stage("layer2_quality", _layer2)
+        metadata["paths"]["rejected_frames_dir"] = str((run_dir / "images_rejected").resolve())
+        write_metadata(meta_path, metadata)
+    else:
+        metadata["stages"]["layer2_quality"] = {
+            "status": "skipped",
+            "reason": "run_layer2 false (--skip-layer2)",
+        }
+        write_metadata(meta_path, metadata)
+        log.info("Layer 2 skipped (--skip-layer2).")
+
+    # 2) COLMAP expects the folder named images/ initially (then renames to source/).
     if not images_dir.is_dir():
         raise FileNotFoundError(f"Expected frames at {images_dir}")
 
@@ -545,6 +581,42 @@ def main() -> None:
         action="store_true",
         help="Run Brush in the terminal only (no window). Default is to open the Brush UI.",
     )
+    # ── Layer 2 flags ─────────────────────────────────────────────────────
+    parser.add_argument(
+        "--skip-layer2",
+        action="store_true",
+        help="Skip frame quality scoring / keyframe selection (Layer 2).",
+    )
+    parser.add_argument(
+        "--blur-threshold",
+        type=float,
+        default=80.0,
+        help="Layer 2: Laplacian variance floor (default: 80). Frames below → rejected as blurry.",
+    )
+    parser.add_argument(
+        "--exposure-threshold",
+        type=float,
+        default=0.15,
+        help="Layer 2: exposure score floor [0,1] (default: 0.15). Frames below → rejected.",
+    )
+    parser.add_argument(
+        "--hamming-threshold",
+        type=int,
+        default=8,
+        help="Layer 2: dHash Hamming distance for duplicate rejection (default: 8).",
+    )
+    parser.add_argument(
+        "--motion-floor",
+        type=float,
+        default=0.03,
+        help="Layer 2: motion score floor [0,1] (default: 0.03). Static frames → rejected.",
+    )
+    parser.add_argument(
+        "--min-keep-frames",
+        type=int,
+        default=30,
+        help="Layer 2: minimum frames to keep; thresholds relaxed if needed (default: 30).",
+    )
     args = parser.parse_args()
 
     dataset_dir = (args.dataset_dir or repo_root() / "Videos_Dataset").resolve()
@@ -570,6 +642,13 @@ def main() -> None:
         run_brush=not args.skip_brush,
         brush_total_steps=args.brush_total_steps,
         brush_headless=args.brush_headless,
+        # Layer 2
+        run_layer2=not args.skip_layer2,
+        blur_threshold=args.blur_threshold,
+        exposure_threshold=args.exposure_threshold,
+        hamming_threshold=args.hamming_threshold,
+        motion_floor=args.motion_floor,
+        min_keep_frames=args.min_keep_frames,
     )
     if not args.no_ingest_menu:
         cfg = ingest_menu_defaults(cfg)
