@@ -197,6 +197,7 @@ def run_pipeline(
             "run_brush": cfg.run_brush,
             "brush_binary": str(cfg.brush_binary) if cfg.brush_binary else None,
             "brush_total_steps": cfg.brush_total_steps,
+            "brush_headless": cfg.brush_headless,
         },
         "paths": {
             "repo_root": str(_ROOT),
@@ -310,7 +311,7 @@ def run_pipeline(
                 "reason": "brush_app not found",
                 "hint": (
                     "Build Brush: cd brush && cargo build --release "
-                    f"(expect { _ROOT / 'brush' / 'target' / 'release' / 'brush_app' }) "
+                    f"(expect {_ROOT / 'brush' / 'target' / 'release' / 'brush_app'}) "
                     "or pass --brush-binary PATH. Use --skip-brush to skip this stage."
                 ),
             }
@@ -327,24 +328,32 @@ def run_pipeline(
                 import subprocess
 
                 steps = int(cfg.brush_total_steps)
-                # One PLY at the final iteration (export_every == total_steps).
+                # Dataset path first. Omit --with-viewer → headless; pass --with-viewer → GUI (no value after flag).
                 cmd = [
                     str(brush_bin),
-                    "--with-viewer",
-                    "false",
                     str(run_dir.resolve()),
-                    "--export-path",
-                    str(outputs_splat.resolve()),
-                    "--export-every",
-                    str(steps),
-                    "--total-steps",
-                    str(steps),
                 ]
+                if not cfg.brush_headless:
+                    cmd.append("--with-viewer")
+                cmd.extend(
+                    [
+                        "--export-path",
+                        str(outputs_splat.resolve()),
+                        "--export-every",
+                        str(steps),
+                        "--total-steps",
+                        str(steps),
+                    ]
+                )
                 log.info("Starting Brush: %s", " ".join(cmd))
                 r = subprocess.run(cmd, cwd=str(run_dir), check=False)
                 if r.returncode != 0:
                     raise RuntimeError(f"Brush exited with code {r.returncode}")
-                return {"command": cmd, "total_steps": steps}
+                return {
+                    "command": cmd,
+                    "total_steps": steps,
+                    "brush_headless": cfg.brush_headless,
+                }
 
             _stage("brush", _brush)
     else:
@@ -421,7 +430,12 @@ def main() -> None:
         "--brush-total-steps",
         type=int,
         default=8000,
-        help="Headless training steps for Brush (default: 8000; use e.g. 30000 for full runs).",
+        help="Training steps for Brush (default: 8000; use e.g. 30000 for full runs).",
+    )
+    parser.add_argument(
+        "--brush-headless",
+        action="store_true",
+        help="Run Brush in the terminal only (no window). Default is to open the Brush UI.",
     )
     args = parser.parse_args()
 
@@ -443,6 +457,7 @@ def main() -> None:
         brush_binary=args.brush_binary.resolve() if args.brush_binary else None,
         run_brush=not args.skip_brush,
         brush_total_steps=args.brush_total_steps,
+        brush_headless=args.brush_headless,
     )
 
     try:

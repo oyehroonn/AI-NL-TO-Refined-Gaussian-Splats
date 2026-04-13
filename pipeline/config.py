@@ -37,8 +37,10 @@ class PipelineConfig:
     model_type: str = "3dgs"
     # Override brush_app; None = look for brush/target/release/brush_app under repo_root().
     brush_binary: Path | None = None
-    # After COLMAP, run Brush headless when True and a binary exists (use skip_brush to disable).
+    # After COLMAP, run Brush when True and a binary exists (use --skip-brush to disable).
     run_brush: bool = True
+    # When False (default), pass --with-viewer so the Brush window opens. True = terminal-only train.
+    brush_headless: bool = False
     # Passed to brush_app --total-steps; export fires at this interval once (= one final PLY).
     brush_total_steps: int = 8000
 

@@ -30,7 +30,7 @@ Layout per run:
 | `logs/pipeline.log` | Orchestrator log |
 | `outputs/splat/` | Place for exported `.ply` (Brush or manual) |
 
-After COLMAP, the pipeline **runs Brush headless by default** when `brush/target/release/brush_app` exists (dataset = the run folder: `images/` + `sparse/0/`). Exports go to `runs/<id>/outputs/splat/`. Flags: `--skip-brush`, `--brush-binary PATH`, `--brush-total-steps N` (default 8000; use 30000 for a full-quality run). If `brush_app` is missing, the Brush stage is skipped with a log message and COLMAP outputs are kept. Lower-level scripts remain in `scripts/`.
+After COLMAP, the pipeline **launches the Brush app with the UI by default** when `brush/target/release/brush_app` exists (dataset = the run folder: `images/` + `sparse/0/`). You can watch training in the window; exports still go to `runs/<id>/outputs/splat/`. Flags: `--brush-headless` (terminal-only, no window), `--skip-brush`, `--brush-binary PATH`, `--brush-total-steps N` (default 8000). If `brush_app` is missing, the Brush stage is skipped with a log message and COLMAP outputs are kept. Lower-level scripts remain in `scripts/`.
 
 ## COLMAP (local copy, not in Git)
 
