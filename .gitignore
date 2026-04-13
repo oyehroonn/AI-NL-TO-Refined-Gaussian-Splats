@@ -2,3 +2,7 @@
 brush/
 colmap/
 colmap-*/
+
+# Local video inputs (not tracked).
+Videos_Dataset/
+videos/
