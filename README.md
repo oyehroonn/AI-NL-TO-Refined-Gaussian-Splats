@@ -60,7 +60,13 @@ Official build-from-source and install details: [https://colmap.github.io/instal
    cargo run --release
    ```
 
-   For a quick CLI overview without starting the full UI workflow you care about, see `cargo run --release -- --help` from that directory (equivalent to running the `brush` binary with `--help` once built).
+   Command-line options (train paths, viewer flags, etc.) are shown with:
+
+   ```bash
+   cargo run --release -- --help
+   ```
+
+   The release binary ends up under `brush/target/release/` (for example `brush_app` for the default desktop target).
 
 ### Using Brush (short overview)
 
