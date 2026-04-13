@@ -96,6 +96,97 @@ def pick_video_interactive(dataset_dir: Path) -> Path:
         print(f"Enter a number from 1 to {len(files)}, or q to quit.")
 
 
+def _prompt_int(prompt: str, *, default: int | None = None, min_value: int | None = None) -> int:
+    while True:
+        d = f"[{default}]" if default is not None else ""
+        raw = input(f"{prompt} {d}: ").strip()
+        if not raw and default is not None:
+            val = default
+        else:
+            try:
+                val = int(raw)
+            except ValueError:
+                print("Enter an integer.")
+                continue
+        if min_value is not None and val < min_value:
+            print(f"Must be >= {min_value}.")
+            continue
+        return val
+
+
+def _prompt_float(prompt: str, *, default: float | None = None, min_value: float | None = None) -> float:
+    while True:
+        d = f"[{default}]" if default is not None else ""
+        raw = input(f"{prompt} {d}: ").strip()
+        if not raw and default is not None:
+            val = default
+        else:
+            try:
+                val = float(raw)
+            except ValueError:
+                print("Enter a number.")
+                continue
+        if min_value is not None and val < min_value:
+            print(f"Must be >= {min_value}.")
+            continue
+        return val
+
+
+def ingest_menu_defaults(cfg: PipelineConfig) -> PipelineConfig:
+    """
+    Interactive menu for Layer 1 options (recommended defaults).
+    Mutates a shallow copy of cfg and returns it.
+    """
+    print("Ingest options (Layer 1). Press Enter to accept defaults.\n")
+    print("Resize:")
+    print("  1) No resize (recommended default)")
+    print("  2) Resize width to 1280 (keep aspect)")
+    print("  3) Resize width to 1920 (keep aspect)")
+    print("  4) Custom resize")
+    choice = input("Select resize option [1]: ").strip() or "1"
+    if choice == "1":
+        cfg.resize_width = None
+        cfg.resize_height = None
+    elif choice == "2":
+        cfg.resize_width = 1280
+        cfg.resize_height = None
+    elif choice == "3":
+        cfg.resize_width = 1920
+        cfg.resize_height = None
+    elif choice == "4":
+        w = input("Resize width (blank to keep aspect): ").strip()
+        h = input("Resize height (blank to keep aspect): ").strip()
+        cfg.resize_width = int(w) if w else None
+        cfg.resize_height = int(h) if h else None
+    else:
+        print("Invalid choice; using default (no resize).")
+        cfg.resize_width = None
+        cfg.resize_height = None
+
+    print("\nFrame-rate reduction:")
+    print("  1) Cap to max frames (recommended default)")
+    print("  2) Keep all frames")
+    print("  3) Target FPS (ffmpeg fps filter)")
+    choice = input("Select frame-rate option [1]: ").strip() or "1"
+    if choice == "1":
+        cfg.keep_all_frames = False
+        cfg.max_frames = _prompt_int("Max frames", default=cfg.max_frames, min_value=1)
+        cfg.target_fps = None
+    elif choice == "2":
+        cfg.keep_all_frames = True
+        cfg.target_fps = None
+    elif choice == "3":
+        cfg.keep_all_frames = True
+        cfg.target_fps = _prompt_float("Target FPS", default=5.0, min_value=0.01)
+    else:
+        print("Invalid choice; using default (cap to max frames).")
+        cfg.keep_all_frames = False
+        cfg.target_fps = None
+
+    print()
+    return cfg
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -190,6 +281,10 @@ def run_pipeline(
         "video_selection": video_selection,
         "config": {
             "max_frames": cfg.max_frames,
+            "keep_all_frames": cfg.keep_all_frames,
+            "resize_width": cfg.resize_width,
+            "resize_height": cfg.resize_height,
+            "target_fps": cfg.target_fps,
             "matcher_type": cfg.matcher_type,
             "interval": cfg.interval,
             "model_type": cfg.model_type,
@@ -261,6 +356,10 @@ def run_pipeline(
             canonical_video,
             run_dir,
             max_frames=cfg.max_frames,
+            keep_all_frames=cfg.keep_all_frames,
+            resize_width=cfg.resize_width,
+            resize_height=cfg.resize_height,
+            target_fps=cfg.target_fps,
             copy_source_video=cfg.copy_video_into_run,
         )
 
@@ -404,6 +503,15 @@ def main() -> None:
     )
     parser.add_argument("--max-frames", type=int, default=250)
     parser.add_argument(
+        "--no-ingest-menu",
+        action="store_true",
+        help="Do not prompt for ingest options; use defaults / CLI flags.",
+    )
+    parser.add_argument("--keep-all-frames", action="store_true", help="Ingest: export every frame.")
+    parser.add_argument("--resize-width", type=int, default=None, help="Ingest: resize width (keep aspect if height omitted).")
+    parser.add_argument("--resize-height", type=int, default=None, help="Ingest: resize height (keep aspect if width omitted).")
+    parser.add_argument("--target-fps", type=float, default=None, help="Ingest: target FPS with ffmpeg fps filter.")
+    parser.add_argument(
         "--matcher-type",
         default="sequential_matcher",
         choices=["sequential_matcher", "exhaustive_matcher"],
@@ -450,6 +558,10 @@ def main() -> None:
     cfg = PipelineConfig(
         runs_root=args.runs_root.resolve() if args.runs_root else PipelineConfig().runs_root,
         max_frames=args.max_frames,
+        keep_all_frames=args.keep_all_frames,
+        resize_width=args.resize_width,
+        resize_height=args.resize_height,
+        target_fps=args.target_fps,
         copy_video_into_run=args.copy_video_beside_frames,
         matcher_type=args.matcher_type,
         interval=args.interval,
@@ -459,6 +571,9 @@ def main() -> None:
         brush_total_steps=args.brush_total_steps,
         brush_headless=args.brush_headless,
     )
+    if not args.no_ingest_menu:
+        cfg = ingest_menu_defaults(cfg)
+    cfg.validate()
 
     try:
         out = run_pipeline(

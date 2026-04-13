@@ -32,6 +32,17 @@ Layout per run:
 
 After COLMAP, the pipeline **launches the Brush app with the UI by default** when `brush/target/release/brush_app` exists (dataset = the run folder: `images/` + `sparse/0/`). You can watch training in the window; exports still go to `runs/<id>/outputs/splat/`. Flags: `--brush-headless` (terminal-only, no window), `--skip-brush`, `--brush-binary PATH`, `--brush-total-steps N` (default 8000). If `brush_app` is missing, the Brush stage is skipped with a log message and COLMAP outputs are kept. Lower-level scripts remain in `scripts/`.
 
+## Layer 1 ingest options (deterministic preprocessing)
+
+When you run `python3 -m pipeline.run_pipeline`, it prompts you for ingest options with recommended defaults:
+
+- **Resize**: none (default) or common widths (1280/1920) or custom.
+- **Frame-rate reduction**: cap to `--max-frames` (default 250), keep all frames, or target FPS.
+
+These options are executed as a single FFmpeg **filtergraph** (e.g. `scale=...,fps=...`) and written into the run metadata (`metadata/run_metadata.json`) and extract-stage stats.
+
+To skip the menu and use CLI defaults/flags, pass `--no-ingest-menu`.
+
 ## COLMAP (local copy, not in Git)
 
 This repository does not include the COLMAP sources on GitHub. If you need a full tree next to the project (for example `colmap-4.0.3/`), obtain it yourself using one of the options below.

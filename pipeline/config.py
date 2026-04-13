@@ -30,6 +30,10 @@ class PipelineConfig:
 
     runs_root: Path = field(default_factory=lambda: repo_root() / "runs")
     max_frames: int = 250
+    keep_all_frames: bool = False
+    resize_width: int | None = None
+    resize_height: int | None = None
+    target_fps: float | None = None
     # When True, also copies the video to the run root; input/input.mp4 is always created.
     copy_video_into_run: bool = False
     matcher_type: str = "sequential_matcher"
@@ -51,5 +55,13 @@ class PipelineConfig:
             raise ValueError(f"Invalid model_type: {self.model_type}")
         if self.interval < 1:
             raise ValueError("interval must be >= 1")
+        if self.max_frames < 1:
+            raise ValueError("max_frames must be >= 1")
+        if self.resize_width is not None and self.resize_width < 1:
+            raise ValueError("resize_width must be >= 1")
+        if self.resize_height is not None and self.resize_height < 1:
+            raise ValueError("resize_height must be >= 1")
+        if self.target_fps is not None and self.target_fps <= 0:
+            raise ValueError("target_fps must be > 0")
         if self.brush_total_steps < 1:
             raise ValueError("brush_total_steps must be >= 1")

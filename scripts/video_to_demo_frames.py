@@ -19,6 +19,38 @@ import sys
 from pathlib import Path
 
 
+def build_filtergraph(
+    *,
+    resize_width: int | None,
+    resize_height: int | None,
+    target_fps: float | None,
+) -> str | None:
+    """
+    Build a deterministic, explicit FFmpeg video filtergraph.
+
+    - resize: uses scale with lanczos resampling; -2 preserves aspect ratio with even dims.
+    - fps: uses fps filter.
+    """
+    filters: list[str] = []
+
+    if resize_width is not None or resize_height is not None:
+        w = resize_width if resize_width is not None else -2
+        h = resize_height if resize_height is not None else -2
+        # Keep aspect ratio when one dimension is unspecified; keep even dims for encoders.
+        if w == -2 and h == -2:
+            raise ValueError("At least one of resize_width/resize_height must be set.")
+        filters.append(f"scale={w}:{h}:flags=lanczos")
+
+    if target_fps is not None:
+        if target_fps <= 0:
+            raise ValueError("target_fps must be > 0")
+        filters.append(f"fps={target_fps}")
+
+    if not filters:
+        return None
+    return ",".join(filters)
+
+
 def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         cmd,
@@ -121,6 +153,10 @@ def extract_video_to_images(
     demo_dir: Path,
     *,
     max_frames: int = 250,
+    keep_all_frames: bool = False,
+    resize_width: int | None = None,
+    resize_height: int | None = None,
+    target_fps: float | None = None,
     image_pattern: str = "frame_%06d.jpg",
     copy_source_video: bool = True,
 ) -> dict:
@@ -148,14 +184,32 @@ def extract_video_to_images(
         "probed_nb_read_frames": nb_probe,
         "estimated_input_frames": est_frames,
         "max_frames": max_frames,
+        "keep_all_frames": keep_all_frames,
+        "resize_width": resize_width,
+        "resize_height": resize_height,
+        "target_fps": target_fps,
         "subsampled": False,
     }
 
     out_template = str(images_dir / image_pattern)
 
-    if est_frames <= max_frames:
+    effective_target_fps: float | None = target_fps
+    if keep_all_frames:
+        effective_target_fps = target_fps
+    elif effective_target_fps is None and est_frames > max_frames:
+        stats["subsampled"] = True
+        effective_target_fps = max_frames / max(duration, 1e-3)
+
+    vf = build_filtergraph(
+        resize_width=resize_width,
+        resize_height=resize_height,
+        target_fps=effective_target_fps,
+    )
+    stats["filtergraph"] = vf
+
+    if effective_target_fps is None:
         print(
-            f"Video has about {est_frames} frame(s) (<= {max_frames}); exporting all frames without temporal subsampling."
+            f"Video has about {est_frames} frame(s); exporting all frames without temporal subsampling."
         )
         cmd = [
             "ffmpeg",
@@ -164,30 +218,38 @@ def extract_video_to_images(
             str(video_path),
             "-vsync",
             "0",
+        ]
+        if vf:
+            cmd.extend(["-vf", vf])
+        cmd.extend(
+            [
             "-qscale:v",
             "2",
             out_template,
-        ]
-    else:
-        stats["subsampled"] = True
-        target_fps = max_frames / max(duration, 1e-3)
-        print(
-            f"\n*** NOTICE: Video has about {est_frames} frames (> {max_frames}). ***\n"
-            f"Subsampling uniformly in time to ~{max_frames} frames "
-            f"(fps filter ≈ {target_fps:.4f} over {duration:.2f}s).\n"
+            ]
         )
-        vf = f"fps={target_fps}"
+    else:
+        if not keep_all_frames and est_frames > max_frames and target_fps is None:
+            print(
+                f"\n*** NOTICE: Video has about {est_frames} frames (> {max_frames}). ***\n"
+                f"Subsampling uniformly in time to ~{max_frames} frames "
+                f"(fps filter ≈ {effective_target_fps:.4f} over {duration:.2f}s).\n"
+            )
         cmd = [
             "ffmpeg",
             "-y",
             "-i",
             str(video_path),
-            "-vf",
-            vf,
+        ]
+        if vf:
+            cmd.extend(["-vf", vf])
+        cmd.extend(
+            [
             "-qscale:v",
             "2",
             out_template,
-        ]
+            ]
+        )
 
     subprocess.run(cmd, check=True)
 
@@ -219,6 +281,21 @@ def main() -> None:
         help="Maximum number of frames to keep (default: 250).",
     )
     parser.add_argument(
+        "--keep-all-frames",
+        action="store_true",
+        help="Export every frame (disables max-frames subsampling).",
+    )
+    parser.add_argument("--resize-width", type=int, default=None, help="Resize width (keeps aspect if height omitted).")
+    parser.add_argument(
+        "--resize-height", type=int, default=None, help="Resize height (keeps aspect if width omitted)."
+    )
+    parser.add_argument(
+        "--target-fps",
+        type=float,
+        default=None,
+        help="Target FPS using ffmpeg fps filter (applied after resize).",
+    )
+    parser.add_argument(
         "--no-copy-video",
         action="store_true",
         help="Do not copy the source video into the demo folder.",
@@ -235,6 +312,10 @@ def main() -> None:
         args.video,
         args.demo_dir,
         max_frames=args.max_frames,
+        keep_all_frames=args.keep_all_frames,
+        resize_width=args.resize_width,
+        resize_height=args.resize_height,
+        target_fps=args.target_fps,
         copy_source_video=not args.no_copy_video,
     )
 
