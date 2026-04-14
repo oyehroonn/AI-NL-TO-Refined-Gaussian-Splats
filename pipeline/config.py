@@ -66,6 +66,19 @@ class PipelineConfig:
     # Halt the pipeline if any critical issues are detected
     layer3_halt_on_critical: bool = False
 
+    # ── Layer 4: monocular depth maps (dpt/) ──────────────────────────────
+    run_layer4: bool = True
+    # Depth model: DPT_Large (default, matches test_dataset), DPT_Hybrid, MiDaS_small, depth_anything_v2_small
+    depth_model: str = "DPT_Large"
+
+    # ── COLMAP matcher auto-selection ──────────────────────────────────────
+    # When True, auto-switch to exhaustive_matcher if frame count <= exhaustive_threshold
+    auto_select_matcher: bool = True
+    # Frame count at or below which exhaustive matching is used (all-pairs C(n,2))
+    exhaustive_threshold: int = 150
+    # Sequential overlap window (used when sequential_matcher is selected)
+    sequential_overlap: int = 20
+
     def validate(self) -> None:
         if self.matcher_type not in ("sequential_matcher", "exhaustive_matcher"):
             raise ValueError(f"Invalid matcher_type: {self.matcher_type}")

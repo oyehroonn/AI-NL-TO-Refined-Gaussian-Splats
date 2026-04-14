@@ -5,6 +5,14 @@ import time
 import datetime
 from shutil import copy2, move
 
+# ── Matcher auto-selection ────────────────────────────────────────────────────
+# After Layer 2 filtering, frame count is typically 80-150.
+# At that size, exhaustive_matcher (all-pairs) is feasible and dramatically
+# better than sequential: test_dataset exhaustive = 4,950 pairs vs
+# our sequential = 1,745 pairs for similar frame counts.
+_AUTO_EXHAUSTIVE_THRESHOLD = 150   # frames ≤ this → use exhaustive
+_SEQUENTIAL_OVERLAP_DEFAULT = 20   # overlap window for sequential (default COLMAP is 10)
+
 def rename_image_folder_if_needed(image_path):
     # Rename the image_path folder to "source" if it's named "input" or "images"
     parent_dir = os.path.abspath(os.path.join(image_path, os.pardir))
@@ -34,7 +42,70 @@ def filter_images(image_path, interval):
         return input_folder
     return image_path
 
-def run_colmap(image_path, matcher_type, interval, model_type):
+def _count_images(folder: str) -> int:
+    """Count image files in a folder (for auto-matcher selection)."""
+    exts = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'}
+    try:
+        return sum(
+            1 for f in os.listdir(folder)
+            if os.path.splitext(f.lower())[1] in exts
+        )
+    except Exception:
+        return 0
+
+
+def _select_matcher(
+    image_path: str,
+    requested_matcher: str,
+    auto_select: bool,
+    sequential_overlap: int,
+    log_file,
+    exhaustive_threshold: int = _AUTO_EXHAUSTIVE_THRESHOLD,
+) -> tuple[str, str]:
+    """
+    Decide which matcher command to use.
+
+    Returns (matcher_name, full_command_suffix) where the suffix includes
+    any extra flags (e.g. --SequentialMatching.overlap).
+    """
+    n_images = _count_images(image_path)
+    msg_prefix = f"[COLMAP] {n_images} images in {image_path}."
+
+    if auto_select and n_images <= exhaustive_threshold:
+        # Exhaustive: every pair matched. Best for ≤threshold frames.
+        # Pair count = n*(n-1)/2. e.g. 100 frames = 4,950 pairs.
+        n_pairs = n_images * (n_images - 1) // 2
+        decision = f"AUTO: exhaustive_matcher ({n_pairs} pairs — all-vs-all)"
+        log_file.write(f"{msg_prefix} {decision}\n")
+        print(f"{msg_prefix} {decision}")
+        return "exhaustive_matcher", ""
+    else:
+        if auto_select:
+            decision = (
+                f"AUTO: sequential_matcher (>{exhaustive_threshold} frames, "
+                f"overlap={sequential_overlap})"
+            )
+        else:
+            decision = f"MANUAL: {requested_matcher} (overlap={sequential_overlap})"
+        log_file.write(f"{msg_prefix} {decision}\n")
+        print(f"{msg_prefix} {decision}")
+        overlap_flag = (
+            f" --SequentialMatching.overlap {sequential_overlap}"
+            if requested_matcher == "sequential_matcher"
+            else ""
+        )
+        return requested_matcher, overlap_flag
+
+
+def run_colmap(
+    image_path,
+    matcher_type,
+    interval,
+    model_type,
+    auto_select_matcher: bool = True,
+    sequential_overlap: int = _SEQUENTIAL_OVERLAP_DEFAULT,
+    exhaustive_threshold: int = _AUTO_EXHAUSTIVE_THRESHOLD,
+):
     # Rename the image_path folder if needed
     image_path = rename_image_folder_if_needed(image_path)
 
@@ -57,17 +128,23 @@ def run_colmap(image_path, matcher_type, interval, model_type):
 
     # Feature extraction + matching, then global SfM via COLMAP 4.x (GLOMAP merged into colmap global_mapper).
     # view_graph_calibrator mutates the DB; use a copy per https://colmap.github.io/cli.html
-    commands = [
-        f"colmap feature_extractor --image_path {image_path} --database_path {database_path} --ImageReader.single_camera 1 --ImageReader.camera_model PINHOLE",
-        f"colmap {matcher_type} --database_path {database_path}",
-    ]
-    global_commands = [
-        f"colmap view_graph_calibrator --database_path {database_global_path}",
-        f"colmap global_mapper --database_path {database_global_path} --image_path {image_path} --output_path {sparse_mapper_out}",
-    ]
-
+    # Camera model: SIMPLE_PINHOLE (1 focal param) is more stable than PINHOLE for single-camera video.
     with open(log_file_path, "w") as log_file:
         log_file.write(f"COLMAP run started at: {datetime.datetime.now()}\n")
+
+        actual_matcher, matcher_flags = _select_matcher(
+            image_path, matcher_type, auto_select_matcher, sequential_overlap, log_file,
+            exhaustive_threshold=exhaustive_threshold,
+        )
+
+        commands = [
+            f"colmap feature_extractor --image_path {image_path} --database_path {database_path} --ImageReader.single_camera 1 --ImageReader.camera_model SIMPLE_PINHOLE",
+            f"colmap {actual_matcher} --database_path {database_path}{matcher_flags}",
+        ]
+        global_commands = [
+            f"colmap view_graph_calibrator --database_path {database_global_path}",
+            f"colmap global_mapper --database_path {database_global_path} --image_path {image_path} --output_path {sparse_mapper_out}",
+        ]
 
         for command in commands:
             command_start_time = time.time()

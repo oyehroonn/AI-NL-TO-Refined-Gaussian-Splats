@@ -42,6 +42,7 @@ if str(_LAYER2_ROOT) not in sys.path:
     sys.path.insert(0, str(_LAYER2_ROOT))
 from layer2.run_layer2 import run_layer2  # noqa: E402
 from layer3.run_layer3 import run_layer3  # noqa: E402
+from layer4.run_layer4 import run_layer4  # noqa: E402
 
 from .config import PipelineConfig, default_brush_app_binary, repo_root  # noqa: E402
 
@@ -307,6 +308,16 @@ def run_pipeline(
             "hamming_threshold": cfg.hamming_threshold,
             "motion_floor": cfg.motion_floor,
             "min_keep_frames": cfg.min_keep_frames,
+            # Layer 3
+            "run_layer3": cfg.run_layer3,
+            "layer3_halt_on_critical": cfg.layer3_halt_on_critical,
+            # Layer 4
+            "run_layer4": cfg.run_layer4,
+            "depth_model": cfg.depth_model,
+            # COLMAP auto-matcher
+            "auto_select_matcher": cfg.auto_select_matcher,
+            "exhaustive_threshold": cfg.exhaustive_threshold,
+            "sequential_overlap": cfg.sequential_overlap,
         },
         "paths": {
             "repo_root": str(_ROOT),
@@ -428,6 +439,26 @@ def run_pipeline(
         write_metadata(meta_path, metadata)
         log.info("Layer 3 skipped (--skip-layer3).")
 
+    # 1d) Layer 4: monocular depth map generation (dpt/ folder for Brush).
+    if cfg.run_layer4:
+        def _layer4():
+            return run_layer4(
+                images_dir,
+                model_type=cfg.depth_model,
+                verbose=True,
+                skip_existing=True,
+            )
+        _stage("layer4_depth", _layer4)
+        metadata["paths"]["dpt_dir"] = str((run_dir / "dpt").resolve())
+        write_metadata(meta_path, metadata)
+    else:
+        metadata["stages"]["layer4_depth"] = {
+            "status": "skipped",
+            "reason": "run_layer4 false (--skip-layer4)",
+        }
+        write_metadata(meta_path, metadata)
+        log.info("Layer 4 skipped (--skip-layer4).")
+
     # 2) COLMAP expects the folder named images/ initially (then renames to source/).
     if not images_dir.is_dir():
         raise FileNotFoundError(f"Expected frames at {images_dir}")
@@ -438,6 +469,9 @@ def run_pipeline(
             cfg.matcher_type,
             cfg.interval,
             cfg.model_type,
+            auto_select_matcher=cfg.auto_select_matcher,
+            sequential_overlap=cfg.sequential_overlap,
+            exhaustive_threshold=cfg.exhaustive_threshold,
         )
         return {}
 
@@ -652,6 +686,36 @@ def main() -> None:
         action="store_true",
         help="Layer 3: halt pipeline if critical issues are detected in the dataset audit.",
     )
+    # ── Layer 4 flags ─────────────────────────────────────────────────────
+    parser.add_argument(
+        "--skip-layer4",
+        action="store_true",
+        help="Skip monocular depth map generation (Layer 4).",
+    )
+    parser.add_argument(
+        "--depth-model",
+        default="DPT_Large",
+        choices=["DPT_Large", "DPT_Hybrid", "MiDaS_small", "depth_anything_v2_small"],
+        help="Layer 4: depth estimation model (default: DPT_Large — matches test_dataset format).",
+    )
+    # ── COLMAP matcher auto-selection flags ───────────────────────────────
+    parser.add_argument(
+        "--no-auto-matcher",
+        action="store_true",
+        help="Disable auto-selection of exhaustive vs sequential matcher (use --matcher-type explicitly).",
+    )
+    parser.add_argument(
+        "--exhaustive-threshold",
+        type=int,
+        default=150,
+        help="Auto-matcher: use exhaustive_matcher when frame count <= this (default: 150).",
+    )
+    parser.add_argument(
+        "--sequential-overlap",
+        type=int,
+        default=20,
+        help="Sequential matcher overlap window (default: 20; COLMAP default is 10).",
+    )
     args = parser.parse_args()
 
     dataset_dir = (args.dataset_dir or repo_root() / "Videos_Dataset").resolve()
@@ -687,6 +751,13 @@ def main() -> None:
         # Layer 3
         run_layer3=not args.skip_layer3,
         layer3_halt_on_critical=args.layer3_halt_on_critical,
+        # Layer 4
+        run_layer4=not args.skip_layer4,
+        depth_model=args.depth_model,
+        # COLMAP auto-matcher
+        auto_select_matcher=not args.no_auto_matcher,
+        exhaustive_threshold=args.exhaustive_threshold,
+        sequential_overlap=args.sequential_overlap,
     )
     if not args.no_ingest_menu:
         cfg = ingest_menu_defaults(cfg)
