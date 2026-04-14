@@ -61,6 +61,11 @@ class PipelineConfig:
     # Safety: relax thresholds if too few frames would survive
     min_keep_frames: int = 30
 
+    # ── Layer 3: pre-COLMAP dataset audit ─────────────────────────────────
+    run_layer3: bool = True
+    # Halt the pipeline if any critical issues are detected
+    layer3_halt_on_critical: bool = False
+
     def validate(self) -> None:
         if self.matcher_type not in ("sequential_matcher", "exhaustive_matcher"):
             raise ValueError(f"Invalid matcher_type: {self.matcher_type}")

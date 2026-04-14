@@ -41,6 +41,7 @@ _LAYER2_ROOT = _ROOT / "scripts"
 if str(_LAYER2_ROOT) not in sys.path:
     sys.path.insert(0, str(_LAYER2_ROOT))
 from layer2.run_layer2 import run_layer2  # noqa: E402
+from layer3.run_layer3 import run_layer3  # noqa: E402
 
 from .config import PipelineConfig, default_brush_app_binary, repo_root  # noqa: E402
 
@@ -404,6 +405,29 @@ def run_pipeline(
         write_metadata(meta_path, metadata)
         log.info("Layer 2 skipped (--skip-layer2).")
 
+    # 1c) Layer 3: pre-COLMAP dataset audit.
+    _l2_stats = metadata.get("stages", {}).get("layer2_quality", {}).get("metrics")
+    if cfg.run_layer3:
+        def _layer3():
+            return run_layer3(
+                images_dir,
+                layer2_stats=_l2_stats,
+                verbose=True,
+                halt_on_critical=cfg.layer3_halt_on_critical,
+            )
+        _stage("layer3_audit", _layer3)
+        metadata["paths"]["layer3_audit"] = str(
+            (run_dir / "metadata" / "layer3_audit.json").resolve()
+        )
+        write_metadata(meta_path, metadata)
+    else:
+        metadata["stages"]["layer3_audit"] = {
+            "status": "skipped",
+            "reason": "run_layer3 false (--skip-layer3)",
+        }
+        write_metadata(meta_path, metadata)
+        log.info("Layer 3 skipped (--skip-layer3).")
+
     # 2) COLMAP expects the folder named images/ initially (then renames to source/).
     if not images_dir.is_dir():
         raise FileNotFoundError(f"Expected frames at {images_dir}")
@@ -617,6 +641,17 @@ def main() -> None:
         default=30,
         help="Layer 2: minimum frames to keep; thresholds relaxed if needed (default: 30).",
     )
+    # ── Layer 3 flags ─────────────────────────────────────────────────────
+    parser.add_argument(
+        "--skip-layer3",
+        action="store_true",
+        help="Skip pre-COLMAP dataset audit (Layer 3).",
+    )
+    parser.add_argument(
+        "--layer3-halt-on-critical",
+        action="store_true",
+        help="Layer 3: halt pipeline if critical issues are detected in the dataset audit.",
+    )
     args = parser.parse_args()
 
     dataset_dir = (args.dataset_dir or repo_root() / "Videos_Dataset").resolve()
@@ -649,6 +684,9 @@ def main() -> None:
         hamming_threshold=args.hamming_threshold,
         motion_floor=args.motion_floor,
         min_keep_frames=args.min_keep_frames,
+        # Layer 3
+        run_layer3=not args.skip_layer3,
+        layer3_halt_on_critical=args.layer3_halt_on_critical,
     )
     if not args.no_ingest_menu:
         cfg = ingest_menu_defaults(cfg)

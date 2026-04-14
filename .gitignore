@@ -9,3 +9,6 @@ videos/
 
 # Pipeline outputs (large).
 runs/
+
+# Local precomputed datasets (large).
+test_dataset/
