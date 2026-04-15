@@ -318,6 +318,8 @@ def run_pipeline(
             "auto_select_matcher": cfg.auto_select_matcher,
             "exhaustive_threshold": cfg.exhaustive_threshold,
             "sequential_overlap": cfg.sequential_overlap,
+            # COLMAP profile
+            "colmap_profile": cfg.colmap_profile,
         },
         "paths": {
             "repo_root": str(_ROOT),
@@ -464,6 +466,8 @@ def run_pipeline(
         raise FileNotFoundError(f"Expected frames at {images_dir}")
 
     def _colmap():
+        # Resolve layer3 audit path for auto-profile selection
+        _audit_path = run_dir / "metadata" / "layer3_audit.json"
         run_glomap.run_colmap(
             str(images_dir),
             cfg.matcher_type,
@@ -472,6 +476,8 @@ def run_pipeline(
             auto_select_matcher=cfg.auto_select_matcher,
             sequential_overlap=cfg.sequential_overlap,
             exhaustive_threshold=cfg.exhaustive_threshold,
+            profile_name=cfg.colmap_profile,
+            layer3_audit_path=str(_audit_path) if _audit_path.exists() else None,
         )
         return {}
 
@@ -716,6 +722,20 @@ def main() -> None:
         default=20,
         help="Sequential matcher overlap window (default: 20; COLMAP default is 10).",
     )
+    # ── COLMAP profile ────────────────────────────────────────────────────
+    parser.add_argument(
+        "--colmap-profile",
+        default="auto",
+        choices=["normal", "video_low_texture", "video_blurry", "wide_lens_phone", "auto"],
+        help=(
+            "COLMAP extraction/matching profile (default: auto). "
+            "auto = read Layer 3 audit and pick the best profile. "
+            "normal = standard SIFT + SIMPLE_PINHOLE. "
+            "video_low_texture = DSP-SIFT + affine shape + guided matching (CPU, slow). "
+            "video_blurry = low peak threshold + DSP-SIFT + guided matching. "
+            "wide_lens_phone = OPENCV distortion model + focal prior."
+        ),
+    )
     args = parser.parse_args()
 
     dataset_dir = (args.dataset_dir or repo_root() / "Videos_Dataset").resolve()
@@ -758,6 +778,8 @@ def main() -> None:
         auto_select_matcher=not args.no_auto_matcher,
         exhaustive_threshold=args.exhaustive_threshold,
         sequential_overlap=args.sequential_overlap,
+        # COLMAP profile
+        colmap_profile=args.colmap_profile,
     )
     if not args.no_ingest_menu:
         cfg = ingest_menu_defaults(cfg)

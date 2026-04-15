@@ -79,6 +79,11 @@ class PipelineConfig:
     # Sequential overlap window (used when sequential_matcher is selected)
     sequential_overlap: int = 20
 
+    # ── COLMAP extraction/matching profile ─────────────────────────────────
+    # One of: normal | video_low_texture | video_blurry | wide_lens_phone | auto
+    # 'auto' reads layer3_audit.json and picks the best profile automatically.
+    colmap_profile: str = "auto"
+
     def validate(self) -> None:
         if self.matcher_type not in ("sequential_matcher", "exhaustive_matcher"):
             raise ValueError(f"Invalid matcher_type: {self.matcher_type}")

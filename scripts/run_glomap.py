@@ -3,7 +3,19 @@ import subprocess
 import argparse
 import time
 import datetime
+from pathlib import Path
 from shutil import copy2, move
+
+from colmap_profiles import (
+    ColmapProfile,
+    build_feature_extractor_cmd,
+    build_matcher_cmd,
+    get_profile,
+    profile_summary,
+    resolve_profile,
+    AUTO_SENTINEL,
+    PROFILE_NAMES,
+)
 
 # ── Matcher auto-selection ────────────────────────────────────────────────────
 # After Layer 2 filtering, frame count is typically 80-150.
@@ -61,19 +73,20 @@ def _select_matcher(
     sequential_overlap: int,
     log_file,
     exhaustive_threshold: int = _AUTO_EXHAUSTIVE_THRESHOLD,
+    overlap_boost: int = 0,
 ) -> tuple[str, str]:
     """
     Decide which matcher command to use.
 
-    Returns (matcher_name, full_command_suffix) where the suffix includes
-    any extra flags (e.g. --SequentialMatching.overlap).
+    overlap_boost is added on top of sequential_overlap (from ColmapProfile).
+    Returns (matcher_name, full_command_suffix).
     """
     n_images = _count_images(image_path)
     msg_prefix = f"[COLMAP] {n_images} images in {image_path}."
+    effective_overlap = sequential_overlap + overlap_boost
 
     if auto_select and n_images <= exhaustive_threshold:
         # Exhaustive: every pair matched. Best for ≤threshold frames.
-        # Pair count = n*(n-1)/2. e.g. 100 frames = 4,950 pairs.
         n_pairs = n_images * (n_images - 1) // 2
         decision = f"AUTO: exhaustive_matcher ({n_pairs} pairs — all-vs-all)"
         log_file.write(f"{msg_prefix} {decision}\n")
@@ -83,14 +96,14 @@ def _select_matcher(
         if auto_select:
             decision = (
                 f"AUTO: sequential_matcher (>{exhaustive_threshold} frames, "
-                f"overlap={sequential_overlap})"
+                f"overlap={effective_overlap})"
             )
         else:
-            decision = f"MANUAL: {requested_matcher} (overlap={sequential_overlap})"
+            decision = f"MANUAL: {requested_matcher} (overlap={effective_overlap})"
         log_file.write(f"{msg_prefix} {decision}\n")
         print(f"{msg_prefix} {decision}")
         overlap_flag = (
-            f" --SequentialMatching.overlap {sequential_overlap}"
+            f" --SequentialMatching.overlap {effective_overlap}"
             if requested_matcher == "sequential_matcher"
             else ""
         )
@@ -105,7 +118,20 @@ def run_colmap(
     auto_select_matcher: bool = True,
     sequential_overlap: int = _SEQUENTIAL_OVERLAP_DEFAULT,
     exhaustive_threshold: int = _AUTO_EXHAUSTIVE_THRESHOLD,
+    profile_name: str = "normal",
+    layer3_audit_path: str | None = None,
 ):
+    """
+    Run the full COLMAP pipeline (feature extract → match → global SfM → undistort).
+
+    profile_name : one of PROFILE_NAMES or 'auto'.
+                   'auto' reads layer3_audit_path to select the best profile.
+    layer3_audit_path : path to metadata/layer3_audit.json (used when profile='auto').
+    """
+    # ── Resolve profile ───────────────────────────────────────────────────
+    audit_p = Path(layer3_audit_path) if layer3_audit_path else None
+    profile: ColmapProfile = resolve_profile(profile_name, audit_p)
+
     # Rename the image_path folder if needed
     image_path = rename_image_folder_if_needed(image_path)
 
@@ -128,19 +154,21 @@ def run_colmap(
 
     # Feature extraction + matching, then global SfM via COLMAP 4.x (GLOMAP merged into colmap global_mapper).
     # view_graph_calibrator mutates the DB; use a copy per https://colmap.github.io/cli.html
-    # Camera model: SIMPLE_PINHOLE (1 focal param) is more stable than PINHOLE for single-camera video.
     with open(log_file_path, "w") as log_file:
         log_file.write(f"COLMAP run started at: {datetime.datetime.now()}\n")
+        log_file.write(f"Profile: {profile_summary(profile)}\n")
+        print(f"[COLMAP] {profile_summary(profile)}")
 
         actual_matcher, matcher_flags = _select_matcher(
             image_path, matcher_type, auto_select_matcher, sequential_overlap, log_file,
             exhaustive_threshold=exhaustive_threshold,
+            overlap_boost=profile.overlap_boost,
         )
 
-        commands = [
-            f"colmap feature_extractor --image_path {image_path} --database_path {database_path} --ImageReader.single_camera 1 --ImageReader.camera_model SIMPLE_PINHOLE",
-            f"colmap {actual_matcher} --database_path {database_path}{matcher_flags}",
-        ]
+        feat_cmd     = build_feature_extractor_cmd(image_path, database_path, profile)
+        matcher_cmd  = build_matcher_cmd(database_path, actual_matcher, matcher_flags, profile)
+
+        commands = [feat_cmd, matcher_cmd]
         global_commands = [
             f"colmap view_graph_calibrator --database_path {database_global_path}",
             f"colmap global_mapper --database_path {database_global_path} --image_path {image_path} --output_path {sparse_mapper_out}",
@@ -215,12 +243,34 @@ if __name__ == "__main__":
         description="Run COLMAP feature extraction, matching, view-graph calibration, and global_mapper (COLMAP 4.x global SfM)."
     )
     parser.add_argument('--image_path', required=True, help="Path to the images folder.")
-    parser.add_argument('--matcher_type', default='sequential_matcher', choices=['sequential_matcher', 'exhaustive_matcher'], 
+    parser.add_argument('--matcher_type', default='sequential_matcher', choices=['sequential_matcher', 'exhaustive_matcher'],
                         help="Type of matcher to use (default: sequential_matcher).")
     parser.add_argument('--interval', type=int, default=1, help="Interval of images to use (default: 1, meaning all images).")
-    parser.add_argument('--model_type', default='3dgs', choices=['3dgs', 'nerfstudio'], 
+    parser.add_argument('--model_type', default='3dgs', choices=['3dgs', 'nerfstudio'],
                         help="Model type to run. '3dgs' includes undistortion, 'nerfstudio' skips undistortion.")
+    parser.add_argument(
+        '--profile',
+        default='normal',
+        choices=PROFILE_NAMES + [AUTO_SENTINEL],
+        help=(
+            "COLMAP extraction/matching profile. "
+            f"Choices: {PROFILE_NAMES + [AUTO_SENTINEL]}. "
+            "auto = select from Layer 3 audit JSON if present."
+        ),
+    )
+    parser.add_argument(
+        '--layer3_audit_path',
+        default=None,
+        help="Path to layer3_audit.json (used when --profile auto).",
+    )
 
     args = parser.parse_args()
 
-    run_colmap(args.image_path, args.matcher_type, args.interval, args.model_type)
+    run_colmap(
+        args.image_path,
+        args.matcher_type,
+        args.interval,
+        args.model_type,
+        profile_name=args.profile,
+        layer3_audit_path=args.layer3_audit_path,
+    )
