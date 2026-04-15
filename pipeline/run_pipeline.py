@@ -40,9 +40,10 @@ import video_to_demo_frames  # noqa: E402
 _LAYER2_ROOT = _ROOT / "scripts"
 if str(_LAYER2_ROOT) not in sys.path:
     sys.path.insert(0, str(_LAYER2_ROOT))
-from layer2.run_layer2 import run_layer2  # noqa: E402
-from layer3.run_layer3 import run_layer3  # noqa: E402
-from layer4.run_layer4 import run_layer4  # noqa: E402
+from layer2.run_layer2 import run_layer2      # noqa: E402
+from layer3.run_layer3 import run_layer3      # noqa: E402
+from layer4.run_layer4 import run_layer4      # noqa: E402
+from layer5.run_layer5 import run_layer5      # noqa: E402
 
 from .config import PipelineConfig, default_brush_app_binary, repo_root  # noqa: E402
 
@@ -320,6 +321,12 @@ def run_pipeline(
             "sequential_overlap": cfg.sequential_overlap,
             # COLMAP profile
             "colmap_profile": cfg.colmap_profile,
+            # Layer 5
+            "run_dense_init": cfg.run_dense_init,
+            "dense_init_samples": cfg.dense_init_samples,
+            "run_sky_masks": cfg.run_sky_masks,
+            "brush_preset": cfg.brush_preset,
+            "brush_default_preset": cfg.brush_default_preset,
         },
         "paths": {
             "repo_root": str(_ROOT),
@@ -496,7 +503,7 @@ def run_pipeline(
     splat = _find_exported_splat(run_dir)
     metadata["paths"]["final_splat"] = splat
 
-    # 3) Brush (headless): COLMAP run root is the dataset path (images/ + sparse/0/).
+    # 3) Layer 5: Brush packaging + training (validate → dense init → sky masks → train).
     brush_bin: Path | None = None
     if cfg.brush_binary is not None:
         brush_bin = cfg.brush_binary.resolve()
@@ -505,7 +512,7 @@ def run_pipeline(
 
     if cfg.run_brush:
         if brush_bin is None or not brush_bin.is_file():
-            metadata["stages"]["brush"] = {
+            metadata["stages"]["layer5_brush"] = {
                 "status": "skipped",
                 "reason": "brush_app not found",
                 "hint": (
@@ -516,47 +523,42 @@ def run_pipeline(
             }
             write_metadata(meta_path, metadata)
             log.warning(
-                "Brush stage skipped: no brush_app at %s. COLMAP outputs are in %s",
+                "Layer 5 skipped: no brush_app at %s. COLMAP outputs are in %s",
                 brush_bin or (_ROOT / "brush" / "target" / "release" / "brush_app"),
                 run_dir,
             )
         else:
             metadata["paths"]["brush_binary"] = str(brush_bin)
 
-            def _brush() -> dict[str, Any]:
-                import subprocess
-
-                steps = int(cfg.brush_total_steps)
-                # Dataset path first. Omit --with-viewer → headless; pass --with-viewer → GUI (no value after flag).
-                cmd = [
-                    str(brush_bin),
-                    str(run_dir.resolve()),
-                ]
-                if not cfg.brush_headless:
-                    cmd.append("--with-viewer")
-                cmd.extend(
-                    [
-                        "--export-path",
-                        str(outputs_splat.resolve()),
-                        "--export-every",
-                        str(steps),
-                        "--total-steps",
-                        str(steps),
-                    ]
+            def _layer5() -> dict[str, Any]:
+                return run_layer5(
+                    run_dir        = run_dir,
+                    brush_bin      = brush_bin,
+                    run_dense_init = cfg.run_dense_init,
+                    run_sky_masks  = cfg.run_sky_masks,
+                    run_brush      = True,
+                    preset         = cfg.brush_preset,
+                    default_preset = cfg.brush_default_preset,
+                    interactive    = True,   # pipeline is interactive by design
+                    with_viewer    = not cfg.brush_headless,
+                    n_samples_per_frame = cfg.dense_init_samples,
+                    verbose        = True,
                 )
-                log.info("Starting Brush: %s", " ".join(cmd))
-                r = subprocess.run(cmd, cwd=str(run_dir), check=False)
-                if r.returncode != 0:
-                    raise RuntimeError(f"Brush exited with code {r.returncode}")
-                return {
-                    "command": cmd,
-                    "total_steps": steps,
-                    "brush_headless": cfg.brush_headless,
-                }
 
-            _stage("brush", _brush)
+            stage_result = _stage("layer5_brush", _layer5)
+
+            # Propagate final PLY path to top-level metadata
+            if isinstance(stage_result, dict):
+                brush_info = stage_result.get("brush", {})
+                if brush_info.get("final_ply"):
+                    metadata["paths"]["final_splat"] = brush_info["final_ply"]
+                    write_metadata(meta_path, metadata)
+                if not brush_info.get("ok", True):
+                    raise RuntimeError(
+                        f"Brush exited with code {brush_info.get('returncode', -1)}"
+                    )
     else:
-        metadata["stages"]["brush"] = {
+        metadata["stages"]["layer5_brush"] = {
             "status": "skipped",
             "reason": "run_brush false (--skip-brush)",
             "hint": f"Open {run_dir} in Brush manually if you want training.",
@@ -736,6 +738,38 @@ def main() -> None:
             "wide_lens_phone = OPENCV distortion model + focal prior."
         ),
     )
+    # ── Layer 5 flags ─────────────────────────────────────────────────────
+    parser.add_argument(
+        "--no-dense-init",
+        action="store_true",
+        help="Skip DPT→init.ply dense point cloud generation (Layer 5).",
+    )
+    parser.add_argument(
+        "--dense-init-samples",
+        type=int,
+        default=2000,
+        help="DPT back-projection samples per frame for init.ply (default: 2000).",
+    )
+    parser.add_argument(
+        "--no-sky-masks",
+        action="store_true",
+        help="Skip sky mask generation (Layer 5).",
+    )
+    parser.add_argument(
+        "--brush-preset",
+        default="auto",
+        choices=["auto", "draft", "standard", "quality", "custom"],
+        help=(
+            "Brush training quality preset (default: auto = show interactive menu). "
+            "draft=8k steps, standard=30k, quality=100k+LPIPS."
+        ),
+    )
+    parser.add_argument(
+        "--brush-default-preset",
+        default="standard",
+        choices=["draft", "standard", "quality"],
+        help="Preset used when --brush-preset=auto and pipeline is non-interactive.",
+    )
     args = parser.parse_args()
 
     dataset_dir = (args.dataset_dir or repo_root() / "Videos_Dataset").resolve()
@@ -780,6 +814,12 @@ def main() -> None:
         sequential_overlap=args.sequential_overlap,
         # COLMAP profile
         colmap_profile=args.colmap_profile,
+        # Layer 5
+        run_dense_init=not args.no_dense_init,
+        dense_init_samples=args.dense_init_samples,
+        run_sky_masks=not args.no_sky_masks,
+        brush_preset=args.brush_preset,
+        brush_default_preset=args.brush_default_preset,
     )
     if not args.no_ingest_menu:
         cfg = ingest_menu_defaults(cfg)

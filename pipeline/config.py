@@ -84,6 +84,19 @@ class PipelineConfig:
     # 'auto' reads layer3_audit.json and picks the best profile automatically.
     colmap_profile: str = "auto"
 
+    # ── Layer 5: Brush packaging + training wrapper ─────────────────────────
+    # Dense init.ply: back-project DPT depth maps into COLMAP world space
+    run_dense_init: bool = True
+    # DPT back-projection samples per frame (total ≈ n_frames × this)
+    dense_init_samples: int = 2000
+    # Sky mask generation: produce masks/ folder to suppress sky floaters
+    run_sky_masks: bool = True
+    # Brush quality preset: "draft" | "standard" | "quality" | "custom" | "auto"
+    # "auto" = show interactive menu before training
+    brush_preset: str = "auto"
+    # Default preset when brush_preset="auto" and pipeline is non-interactive
+    brush_default_preset: str = "standard"
+
     def validate(self) -> None:
         if self.matcher_type not in ("sequential_matcher", "exhaustive_matcher"):
             raise ValueError(f"Invalid matcher_type: {self.matcher_type}")
