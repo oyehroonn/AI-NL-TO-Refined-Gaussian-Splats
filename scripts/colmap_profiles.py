@@ -35,7 +35,7 @@ COLMAP flag reference
 --FeatureExtraction.use_gpu 0            Force CPU extraction
 --SiftExtraction.max_num_features N      Keypoints per image (default 8192)
 --SiftExtraction.peak_threshold T        Lower = more keypoints from soft areas
---SiftMatching.guided_matching 1         F/H-guided re-verification of matches
+--FeatureMatching.guided_matching 1      F/H-guided re-verification of matches
 --ImageReader.camera_model MODEL         Camera distortion model
 --ImageReader.default_focal_length_factor F  Prior: focal = F * max(W, H)
 """
@@ -266,5 +266,5 @@ def build_matcher_cmd(
     """Build the colmap matcher command for the given profile."""
     cmd = f"colmap {actual_matcher} --database_path {database_path}{matcher_flags}"
     if profile.guided_matching:
-        cmd += " --SiftMatching.guided_matching 1"
+        cmd += " --FeatureMatching.guided_matching 1"
     return cmd
