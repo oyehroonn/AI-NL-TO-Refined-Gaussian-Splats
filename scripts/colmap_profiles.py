@@ -32,7 +32,7 @@ COLMAP flag reference
 ─────────────────────
 --SiftExtraction.domain_size_pooling 1   DSP-SIFT: scale-pooled descriptors
 --SiftExtraction.estimate_affine_shape 1 ASIFT (forces CPU, much slower)
---SiftExtraction.use_gpu 0               Force CPU extraction
+--FeatureExtraction.use_gpu 0            Force CPU extraction
 --SiftExtraction.max_num_features N      Keypoints per image (default 8192)
 --SiftExtraction.peak_threshold T        Lower = more keypoints from soft areas
 --SiftMatching.guided_matching 1         F/H-guided re-verification of matches
@@ -62,7 +62,7 @@ class ColmapProfile:
     peak_threshold: float        # COLMAP default: 0.0066667
     domain_size_pooling: bool    # DSP-SIFT
     estimate_affine_shape: bool  # ASIFT — forces CPU
-    # Explicitly pass --SiftExtraction.use_gpu 0 when True.
+    # Explicitly pass --FeatureExtraction.use_gpu 0 when True.
     # Set automatically when estimate_affine_shape=True (COLMAP requires it).
     force_cpu_extraction: bool
 
@@ -253,7 +253,7 @@ def build_feature_extractor_cmd(
     if profile.estimate_affine_shape:
         parts.append("--SiftExtraction.estimate_affine_shape 1")
     if profile.force_cpu_extraction:
-        parts.append("--SiftExtraction.use_gpu 0")
+        parts.append("--FeatureExtraction.use_gpu 0")
     return " ".join(parts)
 
 
