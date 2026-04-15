@@ -44,6 +44,7 @@ from layer2.run_layer2 import run_layer2      # noqa: E402
 from layer3.run_layer3 import run_layer3      # noqa: E402
 from layer4.run_layer4 import run_layer4      # noqa: E402
 from layer5.run_layer5 import run_layer5      # noqa: E402
+from layer6.run_layer6 import run_layer6      # noqa: E402
 
 from .config import PipelineConfig, default_brush_app_binary, repo_root  # noqa: E402
 
@@ -327,6 +328,10 @@ def run_pipeline(
             "run_sky_masks": cfg.run_sky_masks,
             "brush_preset": cfg.brush_preset,
             "brush_default_preset": cfg.brush_default_preset,
+            # Layer 6
+            "run_layer6": cfg.run_layer6,
+            "layer6_save_heatmaps": cfg.layer6_save_heatmaps,
+            "layer6_save_numpy_grids": cfg.layer6_save_numpy_grids,
         },
         "paths": {
             "repo_root": str(_ROOT),
@@ -567,6 +572,38 @@ def run_pipeline(
 
     splat = _find_exported_splat(run_dir)
     metadata["paths"]["final_splat"] = splat
+
+    # 4) Layer 6: post-splat quality analysis.
+    if cfg.run_layer6:
+        ply_path_for_l6 = Path(splat) if splat else None
+
+        def _layer6() -> dict[str, Any]:
+            return run_layer6(
+                run_dir,
+                ply_path         = ply_path_for_l6,
+                verbose          = True,
+                save_heatmaps    = cfg.layer6_save_heatmaps,
+                save_numpy_grids = cfg.layer6_save_numpy_grids,
+            )
+
+        stage_result = _stage("layer6_quality", _layer6)
+        if isinstance(stage_result, dict):
+            metadata["paths"]["layer6_quality_json"] = str(
+                (run_dir / "metadata" / "layer6_quality.json").resolve()
+            )
+            if stage_result.get("layer6_save_heatmaps"):
+                metadata["paths"]["layer6_heatmaps_dir"] = str(
+                    (run_dir / "layer6_heatmaps").resolve()
+                )
+        write_metadata(meta_path, metadata)
+    else:
+        metadata["stages"]["layer6_quality"] = {
+            "status": "skipped",
+            "reason": "run_layer6 false (--skip-layer6)",
+        }
+        write_metadata(meta_path, metadata)
+        log.info("Layer 6 skipped (--skip-layer6).")
+
     metadata["status"] = "completed"
     metadata["completed_at"] = _utc_now()
     write_metadata(meta_path, metadata)
@@ -770,6 +807,22 @@ def main() -> None:
         choices=["draft", "standard", "quality"],
         help="Preset used when --brush-preset=auto and pipeline is non-interactive.",
     )
+    # ── Layer 6 flags ─────────────────────────────────────────────────────
+    parser.add_argument(
+        "--skip-layer6",
+        action="store_true",
+        help="Skip post-splat quality analysis (Layer 6).",
+    )
+    parser.add_argument(
+        "--no-layer6-heatmaps",
+        action="store_true",
+        help="Layer 6: do not save per-view error heatmap PNGs.",
+    )
+    parser.add_argument(
+        "--layer6-save-numpy-grids",
+        action="store_true",
+        help="Layer 6: save coverage/depth mismatch arrays as .npy files.",
+    )
     args = parser.parse_args()
 
     dataset_dir = (args.dataset_dir or repo_root() / "Videos_Dataset").resolve()
@@ -820,6 +873,10 @@ def main() -> None:
         run_sky_masks=not args.no_sky_masks,
         brush_preset=args.brush_preset,
         brush_default_preset=args.brush_default_preset,
+        # Layer 6
+        run_layer6=not args.skip_layer6,
+        layer6_save_heatmaps=not args.no_layer6_heatmaps,
+        layer6_save_numpy_grids=args.layer6_save_numpy_grids,
     )
     if not args.no_ingest_menu:
         cfg = ingest_menu_defaults(cfg)

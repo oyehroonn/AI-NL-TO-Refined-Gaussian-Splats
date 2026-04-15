@@ -97,6 +97,13 @@ class PipelineConfig:
     # Default preset when brush_preset="auto" and pipeline is non-interactive
     brush_default_preset: str = "standard"
 
+    # ── Layer 6: post-splat quality analysis ───────────────────────────────
+    run_layer6: bool = True
+    # Save per-view error heatmap PNGs to layer6_heatmaps/
+    layer6_save_heatmaps: bool = True
+    # Save coverage/depth .npy arrays (large; off by default)
+    layer6_save_numpy_grids: bool = False
+
     def validate(self) -> None:
         if self.matcher_type not in ("sequential_matcher", "exhaustive_matcher"):
             raise ValueError(f"Invalid matcher_type: {self.matcher_type}")
