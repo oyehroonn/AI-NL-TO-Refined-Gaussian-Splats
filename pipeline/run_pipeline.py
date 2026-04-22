@@ -633,11 +633,13 @@ def _run_layer7_interactive(
     _load_dotenv(_ROOT)
 
     # Gather context for the banner
-    l6_summary = metadata.get("stages", {}).get("layer6_quality", {}).get("metrics", {})
-    l3_summary = metadata.get("stages", {}).get("layer3_audit",   {}).get("metrics", {})
+    # layer6_quality metrics = summary dict returned by run_quality_analysis()
+    # layer3_audit metrics   = full audit dict; readiness is under audit["summary"]
+    l6_summary = metadata.get("stages", {}).get("layer6_quality", {}).get("metrics", {}) or {}
+    l3_metrics  = metadata.get("stages", {}).get("layer3_audit",   {}).get("metrics", {}) or {}
     grade      = l6_summary.get("quality_grade", "?")
     n_issues   = l6_summary.get("n_issues", "?")
-    readiness  = l3_summary.get("colmap_readiness", "?") if l3_summary else "?"
+    readiness  = l3_metrics.get("summary", {}).get("colmap_readiness", "?")
 
     print()
     print("━" * 70)
