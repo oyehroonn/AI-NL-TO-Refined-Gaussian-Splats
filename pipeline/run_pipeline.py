@@ -45,6 +45,7 @@ from layer3.run_layer3 import run_layer3      # noqa: E402
 from layer4.run_layer4 import run_layer4      # noqa: E402
 from layer5.run_layer5 import run_layer5      # noqa: E402
 from layer6.run_layer6 import run_layer6      # noqa: E402
+from layer7.run_layer7 import run_layer7, _load_dotenv  # noqa: E402
 
 from .config import PipelineConfig, default_brush_app_binary, repo_root  # noqa: E402
 
@@ -604,11 +605,104 @@ def run_pipeline(
         write_metadata(meta_path, metadata)
         log.info("Layer 6 skipped (--skip-layer6).")
 
+    # 5) Layer 7: AI splat analysis (interactive opt-in prompt).
+    if cfg.run_layer7_prompt:
+        _run_layer7_interactive(run_dir, cfg, metadata, meta_path, log)
+
     metadata["status"] = "completed"
     metadata["completed_at"] = _utc_now()
     write_metadata(meta_path, metadata)
     log.info("Run complete: %s", run_dir)
     return run_dir
+
+
+def _run_layer7_interactive(
+    run_dir:   Path,
+    cfg:       "PipelineConfig",
+    metadata:  dict,
+    meta_path: Path,
+    log:       "logging.Logger",
+) -> None:
+    """
+    Show the 'Ask AI to analyse your splat?' prompt and run Layer 7 if accepted.
+    Loads .env so GROQ_API_KEY is available before prompting.
+    """
+    import os as _os
+
+    # Load .env from repo root so GROQ_API_KEY is picked up automatically
+    _load_dotenv(_ROOT)
+
+    # Gather context for the banner
+    l6_summary = metadata.get("stages", {}).get("layer6_quality", {}).get("metrics", {})
+    l3_summary = metadata.get("stages", {}).get("layer3_audit",   {}).get("metrics", {})
+    grade      = l6_summary.get("quality_grade", "?")
+    n_issues   = l6_summary.get("n_issues", "?")
+    readiness  = l3_summary.get("colmap_readiness", "?") if l3_summary else "?"
+
+    print()
+    print("━" * 70)
+    print("  Layer 7 — AI Splat Analysis  (Powered by Groq)")
+    print("━" * 70)
+    if grade != "?":
+        print(f"\n  Splat grade      : {grade}  |  Issues: {n_issues}")
+    if readiness != "?":
+        print(f"  Capture readiness: {readiness}")
+    print()
+
+    try:
+        ans = input("  Ask AI to analyse your splat? [Y/n]: ").strip().lower()
+    except EOFError:
+        print("  (non-interactive session — skipping AI analysis)")
+        return
+
+    if ans not in ("", "y", "yes"):
+        print("  Skipping AI analysis.")
+        return
+
+    # Resolve API key: config → env var → interactive prompt
+    api_key = cfg.groq_api_key or _os.environ.get("GROQ_API_KEY", "")
+    if not api_key or api_key == "your-groq-api-key-here":
+        try:
+            api_key = input(
+                "  Groq API key (get one free at console.groq.com, "
+                "or press Enter to skip): "
+            ).strip()
+        except EOFError:
+            api_key = ""
+    if not api_key:
+        print("  No API key provided — skipping AI analysis.")
+        return
+
+    model = cfg.groq_model or _os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+
+    print(f"\n  Model: {model}")
+    print()
+
+    try:
+        summary = run_layer7(
+            run_dir,
+            api_key    = api_key,
+            model      = model,
+            max_tokens = cfg.layer7_max_tokens,
+            verbose    = True,
+        )
+        metadata["stages"]["layer7_analysis"] = {
+            "status":     "completed",
+            "ended_at":   _utc_now(),
+            "metrics":    summary,
+        }
+        if summary.get("layer7_json"):
+            metadata["paths"]["layer7_json"] = summary["layer7_json"]
+        if summary.get("layer7_report_md"):
+            metadata["paths"]["layer7_report_md"] = summary["layer7_report_md"]
+    except Exception as exc:
+        log.warning("Layer 7 AI analysis failed: %s", exc)
+        metadata["stages"]["layer7_analysis"] = {
+            "status": "failed",
+            "error":  repr(exc),
+        }
+
+    write_metadata(meta_path, metadata)
 
 
 def main() -> None:
@@ -823,6 +917,30 @@ def main() -> None:
         action="store_true",
         help="Layer 6: save coverage/depth mismatch arrays as .npy files.",
     )
+    # ── Layer 7 flags ─────────────────────────────────────────────────────
+    parser.add_argument(
+        "--skip-layer7",
+        action="store_true",
+        help="Skip the 'Ask AI to analyse your splat?' prompt after Layer 6.",
+    )
+    parser.add_argument(
+        "--groq-api-key",
+        type=str,
+        default=None,
+        help=(
+            "Groq API key for Layer 7 AI analysis "
+            "(overrides GROQ_API_KEY env var and .env file)."
+        ),
+    )
+    parser.add_argument(
+        "--groq-model",
+        type=str,
+        default=None,
+        help=(
+            "Groq model for Layer 7 analysis "
+            "(default: llama-3.3-70b-versatile, overrides GROQ_MODEL env var)."
+        ),
+    )
     args = parser.parse_args()
 
     dataset_dir = (args.dataset_dir or repo_root() / "Videos_Dataset").resolve()
@@ -877,6 +995,10 @@ def main() -> None:
         run_layer6=not args.skip_layer6,
         layer6_save_heatmaps=not args.no_layer6_heatmaps,
         layer6_save_numpy_grids=args.layer6_save_numpy_grids,
+        # Layer 7
+        run_layer7_prompt=not args.skip_layer7,
+        groq_api_key=args.groq_api_key,
+        groq_model=args.groq_model or "llama-3.3-70b-versatile",
     )
     if not args.no_ingest_menu:
         cfg = ingest_menu_defaults(cfg)

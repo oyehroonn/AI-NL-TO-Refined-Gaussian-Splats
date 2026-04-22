@@ -104,6 +104,17 @@ class PipelineConfig:
     # Save coverage/depth .npy arrays (large; off by default)
     layer6_save_numpy_grids: bool = False
 
+    # ── Layer 7: AI splat analysis (Groq LLM) ──────────────────────────────
+    # Show interactive "Ask AI to analyse your splat?" prompt after Layer 6.
+    # Set False (via --skip-layer7) to suppress the prompt in automated runs.
+    run_layer7_prompt: bool = True
+    # Groq API key — overrides GROQ_API_KEY env var and .env file.
+    groq_api_key: str | None = None
+    # Model name (llama-3.3-70b-versatile is the recommended free-tier model).
+    groq_model: str = "llama-3.3-70b-versatile"
+    # Maximum tokens for the AI response.
+    layer7_max_tokens: int = 2048
+
     def validate(self) -> None:
         if self.matcher_type not in ("sequential_matcher", "exhaustive_matcher"):
             raise ValueError(f"Invalid matcher_type: {self.matcher_type}")
