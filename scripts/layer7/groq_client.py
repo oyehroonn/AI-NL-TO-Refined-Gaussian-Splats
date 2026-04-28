@@ -47,6 +47,8 @@ def call_groq(
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type":  "application/json",
+        "User-Agent":    "layer7-groq-client/1.0",
+        "Accept":        "application/json",
     }
 
     last_err: Exception | None = None

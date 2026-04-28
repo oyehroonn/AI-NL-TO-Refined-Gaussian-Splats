@@ -164,6 +164,53 @@ def run_layer7(
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
+def _prompt_yes_no(run_dir: Path) -> bool:
+    """Show the same Y/N banner as the pipeline orchestrator. Returns True to proceed."""
+    import json as _json
+
+    grade = "?"
+    n_issues = "?"
+    readiness = "?"
+
+    l6_path = run_dir / "metadata" / "layer6_quality.json"
+    if l6_path.is_file():
+        try:
+            l6 = _json.loads(l6_path.read_text())
+            grade = l6.get("quality_grade", "?")
+            n_issues = l6.get("n_issues", "?")
+        except Exception:
+            pass
+
+    l3_path = run_dir / "metadata" / "layer3_audit.json"
+    if l3_path.is_file():
+        try:
+            l3 = _json.loads(l3_path.read_text())
+            readiness = l3.get("summary", {}).get("colmap_readiness", "?")
+        except Exception:
+            pass
+
+    print()
+    print("━" * 70)
+    print("  Layer 7 — AI Splat Analysis  (Powered by Groq)")
+    print("━" * 70)
+    if grade != "?":
+        print(f"\n  Splat grade      : {grade}  |  Issues: {n_issues}")
+    if readiness != "?":
+        print(f"  Capture readiness: {readiness}")
+    print()
+
+    try:
+        ans = input("  Ask AI to analyse your splat? [Y/n]: ").strip().lower()
+    except EOFError:
+        print("  (non-interactive session — skipping AI analysis)")
+        return False
+
+    if ans not in ("", "y", "yes"):
+        print("  Skipping AI analysis.")
+        return False
+    return True
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Layer 7: AI splat analysis using Groq LLM.",
@@ -199,7 +246,16 @@ def main() -> None:
         action="store_true",
         help="Suppress progress output.",
     )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the [Y/n] confirmation prompt and run immediately.",
+    )
     args = parser.parse_args()
+
+    if not args.yes:
+        if not _prompt_yes_no(args.run_dir):
+            sys.exit(0)
 
     try:
         summary = run_layer7(
