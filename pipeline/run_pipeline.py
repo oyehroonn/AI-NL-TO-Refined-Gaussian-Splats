@@ -5,7 +5,7 @@ Baseline orchestrator (Layer 0): one run root, predictable subfolders, metadata 
 Stages:
   1. input/input.mp4 — canonical copy of the source video
   2. extract — frames under images/ (then COLMAP renames to source/)
-  3. colmap — database, sparse, undistortion via scripts/run_glomap.py
+  3. colmap — database, sparse, undistortion via upload_to_splat/run_glomap.py
   4. outputs/splat/ — reserved for exported .ply (Brush or manual)
   5. metadata/run_metadata.json — updated after each stage
 
@@ -28,24 +28,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-# Import existing stage scripts (no package under scripts/).
+# Import stage modules from upload_to_splat/ (the upload-video-to-splat pipeline).
 _ROOT = Path(__file__).resolve().parent.parent
-if str(_ROOT / "scripts") not in sys.path:
-    sys.path.insert(0, str(_ROOT / "scripts"))
+_UPLOAD_ROOT = _ROOT / "upload_to_splat"
+if str(_UPLOAD_ROOT) not in sys.path:
+    sys.path.insert(0, str(_UPLOAD_ROOT))
 
 import run_glomap  # noqa: E402
-import video_to_demo_frames  # noqa: E402
+from frame_extraction_layer import video_to_demo_frames  # noqa: E402
 
-# Layer 2 lives under scripts/layer2/
-_LAYER2_ROOT = _ROOT / "scripts"
-if str(_LAYER2_ROOT) not in sys.path:
-    sys.path.insert(0, str(_LAYER2_ROOT))
-from layer2.run_layer2 import run_layer2      # noqa: E402
-from layer3.run_layer3 import run_layer3      # noqa: E402
-from layer4.run_layer4 import run_layer4      # noqa: E402
-from layer5.run_layer5 import run_layer5      # noqa: E402
-from layer6.run_layer6 import run_layer6      # noqa: E402
-from layer7.run_layer7 import run_layer7, _load_dotenv  # noqa: E402
+from frame_quality_layer.run_layer2     import run_layer2  # noqa: E402
+from dataset_audit_layer.run_layer3     import run_layer3  # noqa: E402
+from depth_estimation_layer.run_layer4  import run_layer4  # noqa: E402
+from brush_packaging_layer.run_layer5   import run_layer5  # noqa: E402
+from splat_quality_layer.run_layer6     import run_layer6  # noqa: E402
+from ai_analysis_layer.run_layer7       import run_layer7, _load_dotenv  # noqa: E402
 
 from .config import PipelineConfig, default_brush_app_binary, repo_root  # noqa: E402
 
