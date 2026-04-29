@@ -125,8 +125,7 @@ def _peek_image_size(path: Path) -> tuple[int, int]:
     actual dimensions from the JPEGs.
     """
     try:
-        import imghdr  # noqa: F401  (kept for clarity; not strictly needed)
-        # Minimal JPEG SOF parser:
+        # Minimal JPEG SOF parser (stdlib only — `imghdr` is gone in Py3.13):
         data = path.read_bytes()
         i = 0
         while i < len(data) - 9:

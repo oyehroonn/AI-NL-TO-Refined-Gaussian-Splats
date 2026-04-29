@@ -1,0 +1,341 @@
+{
+  "schema_version": 1,
+  "session_id": "4d0854fd",
+  "run_id": "run1__e2e_test",
+  "video_name": "e2e_test",
+  "scene_type": "object",
+  "started_at_unix": 1777423960.948364,
+  "ended_at_unix": 1777423961.1150308,
+  "device": {
+    "model": "fake_phone",
+    "os": "fake_os",
+    "lidar_supported": false,
+    "scene_reconstruction_supported": false,
+    "ar_world_tracking_configuration": {
+      "video_format": {
+        "width": 1920,
+        "height": 1080,
+        "fps": 30
+      },
+      "frame_semantics": [],
+      "plane_detection": [],
+      "scene_reconstruction": "none"
+    }
+  },
+  "summary": {
+    "frames_captured": 5,
+    "frames_kept": 5,
+    "duration_seconds": 0.16666674613952637,
+    "tracking_state_breakdown": {
+      "normal": 5,
+      "limited": 0,
+      "notAvailable": 0
+    },
+    "world_mapping_status_breakdown": {
+      "extending": 5
+    },
+    "coverage_summary": {
+      "covered_fraction": 0.6,
+      "weak_regions": []
+    },
+    "preview_run": false,
+    "enhance_run": false
+  },
+  "frames": [
+    {
+      "frame_id": 0,
+      "timestamp": 1777423960.948364,
+      "image_path": "frames/frame_000001.jpg",
+      "camera_transform_world": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "camera_intrinsics": [
+        [
+          1920.0,
+          0.0,
+          960.0
+        ],
+        [
+          0.0,
+          1920.0,
+          540.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "image_width": 1920,
+      "image_height": 1080,
+      "tracking_state": "normal",
+      "tracking_reason": null,
+      "world_mapping_status": "extending",
+      "raw_feature_points_count": 1500,
+      "has_scene_depth": false,
+      "pose_quality_score": 0.9,
+      "blur_score": 150.0,
+      "coverage_score": 0.6,
+      "accepted_for_training": true
+    },
+    {
+      "frame_id": 1,
+      "timestamp": 1777423960.9816973,
+      "image_path": "frames/frame_000002.jpg",
+      "camera_transform_world": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.05
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "camera_intrinsics": [
+        [
+          1920.0,
+          0.0,
+          960.0
+        ],
+        [
+          0.0,
+          1920.0,
+          540.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "image_width": 1920,
+      "image_height": 1080,
+      "tracking_state": "normal",
+      "tracking_reason": null,
+      "world_mapping_status": "extending",
+      "raw_feature_points_count": 1501,
+      "has_scene_depth": false,
+      "pose_quality_score": 0.9,
+      "blur_score": 150.0,
+      "coverage_score": 0.6,
+      "accepted_for_training": true
+    },
+    {
+      "frame_id": 2,
+      "timestamp": 1777423961.0150306,
+      "image_path": "frames/frame_000003.jpg",
+      "camera_transform_world": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.1
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "camera_intrinsics": [
+        [
+          1920.0,
+          0.0,
+          960.0
+        ],
+        [
+          0.0,
+          1920.0,
+          540.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "image_width": 1920,
+      "image_height": 1080,
+      "tracking_state": "normal",
+      "tracking_reason": null,
+      "world_mapping_status": "extending",
+      "raw_feature_points_count": 1502,
+      "has_scene_depth": false,
+      "pose_quality_score": 0.9,
+      "blur_score": 150.0,
+      "coverage_score": 0.6,
+      "accepted_for_training": true
+    },
+    {
+      "frame_id": 3,
+      "timestamp": 1777423961.048364,
+      "image_path": "frames/frame_000004.jpg",
+      "camera_transform_world": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.15000000000000002
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "camera_intrinsics": [
+        [
+          1920.0,
+          0.0,
+          960.0
+        ],
+        [
+          0.0,
+          1920.0,
+          540.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "image_width": 1920,
+      "image_height": 1080,
+      "tracking_state": "normal",
+      "tracking_reason": null,
+      "world_mapping_status": "extending",
+      "raw_feature_points_count": 1503,
+      "has_scene_depth": false,
+      "pose_quality_score": 0.9,
+      "blur_score": 150.0,
+      "coverage_score": 0.6,
+      "accepted_for_training": true
+    },
+    {
+      "frame_id": 4,
+      "timestamp": 1777423961.0816975,
+      "image_path": "frames/frame_000005.jpg",
+      "camera_transform_world": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.2
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "camera_intrinsics": [
+        [
+          1920.0,
+          0.0,
+          960.0
+        ],
+        [
+          0.0,
+          1920.0,
+          540.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "image_width": 1920,
+      "image_height": 1080,
+      "tracking_state": "normal",
+      "tracking_reason": null,
+      "world_mapping_status": "extending",
+      "raw_feature_points_count": 1504,
+      "has_scene_depth": false,
+      "pose_quality_score": 0.9,
+      "blur_score": 150.0,
+      "coverage_score": 0.6,
+      "accepted_for_training": true
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "session_id": "4d0854fd",
+  "run_id": "run1__e2e_test",
+  "video_name": "e2e_test",
+  "scene_type_default": "room",
+  "protocol_version": 1,
+  "expires_at_unix": 1777423977,
+  "started_at_unix": 1777423917.478174,
+  "host_ip": "192.168.1.107",
+  "port": 8765,
+  "http_url": "http://192.168.1.107:8765",
+  "deep_link": "claudesplat://join?session=4d0854fd&host=192.168.1.107:8765&v=1",
+  "join_url": "http://192.168.1.107:8765/join?session=4d0854fd&v=1",
+  "run_dir": "/Users/oyehroonn/Downloads/AI-3D-Gaussian/AI-NL-TO-Refined-Gaussian-Splats/ar_runs/run1__e2e_test"
+}

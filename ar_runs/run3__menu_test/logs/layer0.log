@@ -1,0 +1,5 @@
+2026-04-29 02:53:46,551 INFO ar_layer0 AR capture session e5284a0b allocated at /Users/oyehroonn/Downloads/AI-3D-Gaussian/AI-NL-TO-Refined-Gaussian-Splats/ar_runs/run3__menu_test
+2026-04-29 02:53:57,453 INFO ar_layer0.server 192.168.1.106 - "GET /join?session=e5284a0b&v=1 HTTP/1.1" 200 -
+2026-04-29 02:53:57,525 INFO ar_layer0.server 192.168.1.106 - "GET /favicon.ico HTTP/1.1" 404 -
+2026-04-29 02:55:12,668 INFO ar_layer0.server 192.168.1.106 - "GET /join?session=e5284a0b&v=1 HTTP/1.1" 200 -
+2026-04-29 02:55:31,067 INFO ar_layer0.server 192.168.1.106 - "GET /join?session=e5284a0b&v=1 HTTP/1.1" 200 -

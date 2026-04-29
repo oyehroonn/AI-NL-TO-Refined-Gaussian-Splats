@@ -1,0 +1,6 @@
+2026-04-29 02:51:57,478 INFO ar_layer0 AR capture session 4d0854fd allocated at /Users/oyehroonn/Downloads/AI-3D-Gaussian/AI-NL-TO-Refined-Gaussian-Splats/ar_runs/run1__e2e_test
+2026-04-29 02:52:32,667 INFO ar_layer0.server 192.168.1.107 - "GET /healthz HTTP/1.1" 200 -
+2026-04-29 02:52:32,677 INFO ar_layer0.server 192.168.1.107 - "GET /session HTTP/1.1" 200 -
+2026-04-29 02:52:32,687 INFO ar_layer0.server 192.168.1.107 - "GET /tutorial-config?scene_type=object HTTP/1.1" 200 -
+2026-04-29 02:52:40,935 INFO ar_layer0.server 192.168.1.107 - "GET /session HTTP/1.1" 200 -
+2026-04-29 02:52:40,973 INFO ar_layer0.server 192.168.1.107 - "POST /upload HTTP/1.1" 200 -

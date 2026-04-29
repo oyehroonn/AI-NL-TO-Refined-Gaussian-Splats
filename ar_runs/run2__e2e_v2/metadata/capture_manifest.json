@@ -1,0 +1,13 @@
+{
+  "session_id": "87210dd1",
+  "run_id": "run2__e2e_v2",
+  "received_at_unix": 1777424004.167648,
+  "summary": {
+    "frames_received": 3,
+    "depth_received": 0,
+    "smoothed_depth_received": 0,
+    "tracking_state_breakdown": {
+      "normal": 3
+    }
+  }
+}

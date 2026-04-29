@@ -1,0 +1,3 @@
+2026-04-29 02:53:22,580 INFO ar_layer0 AR capture session 87210dd1 allocated at /Users/oyehroonn/Downloads/AI-3D-Gaussian/AI-NL-TO-Refined-Gaussian-Splats/ar_runs/run2__e2e_v2
+2026-04-29 02:53:24,152 INFO ar_layer0.server 192.168.1.107 - "GET /session HTTP/1.1" 200 -
+2026-04-29 02:53:24,167 INFO ar_layer0.server 192.168.1.107 - "POST /upload HTTP/1.1" 200 -
