@@ -1,0 +1,1784 @@
+{
+  "device": {
+    "model": "iPhone16,2",
+    "scene_reconstruction_supported": false,
+    "lidar_supported": false,
+    "os": "iOS 26.3.1",
+    "ar_world_tracking_configuration": {
+      "video_format": {
+        "fps": 30,
+        "height": 4032,
+        "width": 3024
+      },
+      "plane_detection": [],
+      "scene_reconstruction": "none",
+      "frame_semantics": []
+    }
+  },
+  "run_id": "run1__hamzaRoom",
+  "session_id": "9b6142eb",
+  "video_name": "hamzaRoom",
+  "schema_version": 1,
+  "ended_at_unix": 1777498790.71011,
+  "started_at_unix": 1777498770.0561352,
+  "frames": [
+    {
+      "image_height": 4032,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_width": 3024,
+      "timestamp": 1777498770.0561352,
+      "frame_id": 0,
+      "raw_feature_points_count": 1500,
+      "world_mapping_status": "extending",
+      "coverage_score": 0.6,
+      "has_scene_depth": false,
+      "blur_score": 150,
+      "accepted_for_training": true,
+      "pose_quality_score": 0.9,
+      "tracking_state": "normal",
+      "image_path": "frames/frame_000000.jpg"
+    },
+    {
+      "image_height": 4032,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          0.05
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_width": 3024,
+      "timestamp": 1777498770.2678208,
+      "frame_id": 1,
+      "raw_feature_points_count": 1501,
+      "world_mapping_status": "extending",
+      "coverage_score": 0.6,
+      "has_scene_depth": false,
+      "blur_score": 150,
+      "accepted_for_training": true,
+      "pose_quality_score": 0.9,
+      "tracking_state": "normal",
+      "image_path": "frames/frame_000001.jpg"
+    },
+    {
+      "image_height": 4032,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          0.1
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_width": 3024,
+      "timestamp": 1777498770.6928868,
+      "frame_id": 2,
+      "raw_feature_points_count": 1502,
+      "world_mapping_status": "extending",
+      "coverage_score": 0.6,
+      "has_scene_depth": false,
+      "blur_score": 150,
+      "accepted_for_training": true,
+      "pose_quality_score": 0.9,
+      "tracking_state": "normal",
+      "image_path": "frames/frame_000002.jpg"
+    },
+    {
+      "image_height": 4032,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          0.15000000000000002
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_width": 3024,
+      "timestamp": 1777498771.164238,
+      "frame_id": 3,
+      "raw_feature_points_count": 1503,
+      "world_mapping_status": "extending",
+      "coverage_score": 0.6,
+      "has_scene_depth": false,
+      "blur_score": 150,
+      "accepted_for_training": true,
+      "pose_quality_score": 0.9,
+      "tracking_state": "normal",
+      "image_path": "frames/frame_000003.jpg"
+    },
+    {
+      "image_height": 4032,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          0.2
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_width": 3024,
+      "timestamp": 1777498771.767837,
+      "frame_id": 4,
+      "raw_feature_points_count": 1504,
+      "world_mapping_status": "extending",
+      "coverage_score": 0.6,
+      "has_scene_depth": false,
+      "blur_score": 150,
+      "accepted_for_training": true,
+      "pose_quality_score": 0.9,
+      "tracking_state": "normal",
+      "image_path": "frames/frame_000004.jpg"
+    },
+    {
+      "image_height": 4032,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          0.25
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_width": 3024,
+      "timestamp": 1777498772.348928,
+      "frame_id": 5,
+      "raw_feature_points_count": 1505,
+      "world_mapping_status": "extending",
+      "coverage_score": 0.6,
+      "has_scene_depth": false,
+      "blur_score": 150,
+      "accepted_for_training": true,
+      "pose_quality_score": 0.9,
+      "tracking_state": "normal",
+      "image_path": "frames/frame_000005.jpg"
+    },
+    {
+      "image_height": 4032,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          0.30000000000000004
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_width": 3024,
+      "timestamp": 1777498772.971391,
+      "frame_id": 6,
+      "raw_feature_points_count": 1506,
+      "world_mapping_status": "extending",
+      "coverage_score": 0.6,
+      "has_scene_depth": false,
+      "blur_score": 150,
+      "accepted_for_training": true,
+      "pose_quality_score": 0.9,
+      "tracking_state": "normal",
+      "image_path": "frames/frame_000006.jpg"
+    },
+    {
+      "image_height": 4032,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          0.35000000000000003
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_width": 3024,
+      "timestamp": 1777498773.557421,
+      "frame_id": 7,
+      "raw_feature_points_count": 1507,
+      "world_mapping_status": "extending",
+      "coverage_score": 0.6,
+      "has_scene_depth": false,
+      "blur_score": 150,
+      "accepted_for_training": true,
+      "pose_quality_score": 0.9,
+      "tracking_state": "normal",
+      "image_path": "frames/frame_000007.jpg"
+    },
+    {
+      "image_height": 4032,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          0.4
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_width": 3024,
+      "timestamp": 1777498774.167841,
+      "frame_id": 8,
+      "raw_feature_points_count": 1508,
+      "world_mapping_status": "extending",
+      "coverage_score": 0.6,
+      "has_scene_depth": false,
+      "blur_score": 150,
+      "accepted_for_training": true,
+      "pose_quality_score": 0.9,
+      "tracking_state": "normal",
+      "image_path": "frames/frame_000008.jpg"
+    },
+    {
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          0.45
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_height": 4032,
+      "image_path": "frames/frame_000009.jpg",
+      "has_scene_depth": false,
+      "accepted_for_training": true,
+      "pose_quality_score": 0.9,
+      "blur_score": 150,
+      "coverage_score": 0.6,
+      "frame_id": 9,
+      "tracking_state": "normal",
+      "image_width": 3024,
+      "timestamp": 1777498774.769418,
+      "raw_feature_points_count": 1509,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "world_mapping_status": "extending"
+    },
+    {
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          0.5
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_height": 4032,
+      "image_path": "frames/frame_000010.jpg",
+      "has_scene_depth": false,
+      "accepted_for_training": true,
+      "pose_quality_score": 0.9,
+      "blur_score": 150,
+      "coverage_score": 0.6,
+      "frame_id": 10,
+      "tracking_state": "normal",
+      "image_width": 3024,
+      "timestamp": 1777498775.364027,
+      "raw_feature_points_count": 1510,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "world_mapping_status": "extending"
+    },
+    {
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          0.55
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_height": 4032,
+      "image_path": "frames/frame_000011.jpg",
+      "has_scene_depth": false,
+      "accepted_for_training": true,
+      "pose_quality_score": 0.9,
+      "blur_score": 150,
+      "coverage_score": 0.6,
+      "frame_id": 11,
+      "tracking_state": "normal",
+      "image_width": 3024,
+      "timestamp": 1777498775.9739962,
+      "raw_feature_points_count": 1511,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "world_mapping_status": "extending"
+    },
+    {
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          0.6000000000000001
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_height": 4032,
+      "image_path": "frames/frame_000012.jpg",
+      "has_scene_depth": false,
+      "accepted_for_training": true,
+      "pose_quality_score": 0.9,
+      "blur_score": 150,
+      "coverage_score": 0.6,
+      "frame_id": 12,
+      "tracking_state": "normal",
+      "image_width": 3024,
+      "timestamp": 1777498776.564313,
+      "raw_feature_points_count": 1512,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "world_mapping_status": "extending"
+    },
+    {
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          0.65
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_height": 4032,
+      "image_path": "frames/frame_000013.jpg",
+      "has_scene_depth": false,
+      "accepted_for_training": true,
+      "pose_quality_score": 0.9,
+      "blur_score": 150,
+      "coverage_score": 0.6,
+      "frame_id": 13,
+      "tracking_state": "normal",
+      "image_width": 3024,
+      "timestamp": 1777498777.203137,
+      "raw_feature_points_count": 1513,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "world_mapping_status": "extending"
+    },
+    {
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          0.7000000000000001
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_height": 4032,
+      "image_path": "frames/frame_000014.jpg",
+      "has_scene_depth": false,
+      "accepted_for_training": true,
+      "pose_quality_score": 0.9,
+      "blur_score": 150,
+      "coverage_score": 0.6,
+      "frame_id": 14,
+      "tracking_state": "normal",
+      "image_width": 3024,
+      "timestamp": 1777498777.8912458,
+      "raw_feature_points_count": 1514,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "world_mapping_status": "extending"
+    },
+    {
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          0.75
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_height": 4032,
+      "image_path": "frames/frame_000015.jpg",
+      "has_scene_depth": false,
+      "accepted_for_training": true,
+      "pose_quality_score": 0.9,
+      "blur_score": 150,
+      "coverage_score": 0.6,
+      "frame_id": 15,
+      "tracking_state": "normal",
+      "image_width": 3024,
+      "timestamp": 1777498778.7348042,
+      "raw_feature_points_count": 1515,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "world_mapping_status": "extending"
+    },
+    {
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          0.8
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_height": 4032,
+      "image_path": "frames/frame_000016.jpg",
+      "has_scene_depth": false,
+      "accepted_for_training": true,
+      "pose_quality_score": 0.9,
+      "blur_score": 150,
+      "coverage_score": 0.6,
+      "frame_id": 16,
+      "tracking_state": "normal",
+      "image_width": 3024,
+      "timestamp": 1777498779.887416,
+      "raw_feature_points_count": 1516,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "world_mapping_status": "extending"
+    },
+    {
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          0.8500000000000001
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_height": 4032,
+      "image_path": "frames/frame_000017.jpg",
+      "has_scene_depth": false,
+      "accepted_for_training": true,
+      "pose_quality_score": 0.9,
+      "blur_score": 150,
+      "coverage_score": 0.6,
+      "frame_id": 17,
+      "tracking_state": "normal",
+      "image_width": 3024,
+      "timestamp": 1777498780.901185,
+      "raw_feature_points_count": 1517,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "world_mapping_status": "extending"
+    },
+    {
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          0.9
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_height": 4032,
+      "image_path": "frames/frame_000018.jpg",
+      "has_scene_depth": false,
+      "accepted_for_training": true,
+      "pose_quality_score": 0.9,
+      "blur_score": 150,
+      "coverage_score": 0.6,
+      "frame_id": 18,
+      "tracking_state": "normal",
+      "image_width": 3024,
+      "timestamp": 1777498781.790441,
+      "raw_feature_points_count": 1518,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "world_mapping_status": "extending"
+    },
+    {
+      "frame_id": 19,
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          0.9500000000000001
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_path": "frames/frame_000019.jpg",
+      "blur_score": 150,
+      "image_width": 3024,
+      "timestamp": 1777498782.63149,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_height": 4032,
+      "tracking_state": "normal",
+      "has_scene_depth": false,
+      "accepted_for_training": true,
+      "raw_feature_points_count": 1519,
+      "pose_quality_score": 0.9,
+      "world_mapping_status": "extending",
+      "coverage_score": 0.6
+    },
+    {
+      "frame_id": 20,
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          1
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_path": "frames/frame_000020.jpg",
+      "blur_score": 150,
+      "image_width": 3024,
+      "timestamp": 1777498783.3801498,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_height": 4032,
+      "tracking_state": "normal",
+      "has_scene_depth": false,
+      "accepted_for_training": true,
+      "raw_feature_points_count": 1520,
+      "pose_quality_score": 0.9,
+      "world_mapping_status": "extending",
+      "coverage_score": 0.6
+    },
+    {
+      "frame_id": 21,
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          1.05
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_path": "frames/frame_000021.jpg",
+      "blur_score": 150,
+      "image_width": 3024,
+      "timestamp": 1777498784.174368,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_height": 4032,
+      "tracking_state": "normal",
+      "has_scene_depth": false,
+      "accepted_for_training": true,
+      "raw_feature_points_count": 1521,
+      "pose_quality_score": 0.9,
+      "world_mapping_status": "extending",
+      "coverage_score": 0.6
+    },
+    {
+      "frame_id": 22,
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          1.1
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_path": "frames/frame_000022.jpg",
+      "blur_score": 150,
+      "image_width": 3024,
+      "timestamp": 1777498784.976417,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_height": 4032,
+      "tracking_state": "normal",
+      "has_scene_depth": false,
+      "accepted_for_training": true,
+      "raw_feature_points_count": 1522,
+      "pose_quality_score": 0.9,
+      "world_mapping_status": "extending",
+      "coverage_score": 0.6
+    },
+    {
+      "frame_id": 23,
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          1.1500000000000001
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_path": "frames/frame_000023.jpg",
+      "blur_score": 150,
+      "image_width": 3024,
+      "timestamp": 1777498785.721945,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_height": 4032,
+      "tracking_state": "normal",
+      "has_scene_depth": false,
+      "accepted_for_training": true,
+      "raw_feature_points_count": 1523,
+      "pose_quality_score": 0.9,
+      "world_mapping_status": "extending",
+      "coverage_score": 0.6
+    },
+    {
+      "frame_id": 24,
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          1.2000000000000002
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_path": "frames/frame_000024.jpg",
+      "blur_score": 150,
+      "image_width": 3024,
+      "timestamp": 1777498786.453409,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_height": 4032,
+      "tracking_state": "normal",
+      "has_scene_depth": false,
+      "accepted_for_training": true,
+      "raw_feature_points_count": 1524,
+      "pose_quality_score": 0.9,
+      "world_mapping_status": "extending",
+      "coverage_score": 0.6
+    },
+    {
+      "frame_id": 25,
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          1.25
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_path": "frames/frame_000025.jpg",
+      "blur_score": 150,
+      "image_width": 3024,
+      "timestamp": 1777498787.386745,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_height": 4032,
+      "tracking_state": "normal",
+      "has_scene_depth": false,
+      "accepted_for_training": true,
+      "raw_feature_points_count": 1525,
+      "pose_quality_score": 0.9,
+      "world_mapping_status": "extending",
+      "coverage_score": 0.6
+    },
+    {
+      "frame_id": 26,
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          1.3
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_path": "frames/frame_000026.jpg",
+      "blur_score": 150,
+      "image_width": 3024,
+      "timestamp": 1777498788.280344,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_height": 4032,
+      "tracking_state": "normal",
+      "has_scene_depth": false,
+      "accepted_for_training": true,
+      "raw_feature_points_count": 1526,
+      "pose_quality_score": 0.9,
+      "world_mapping_status": "extending",
+      "coverage_score": 0.6
+    },
+    {
+      "frame_id": 27,
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          1.35
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_path": "frames/frame_000027.jpg",
+      "blur_score": 150,
+      "image_width": 3024,
+      "timestamp": 1777498789.124232,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_height": 4032,
+      "tracking_state": "normal",
+      "has_scene_depth": false,
+      "accepted_for_training": true,
+      "raw_feature_points_count": 1527,
+      "pose_quality_score": 0.9,
+      "world_mapping_status": "extending",
+      "coverage_score": 0.6
+    },
+    {
+      "frame_id": 28,
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          1.4000000000000001
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_path": "frames/frame_000028.jpg",
+      "blur_score": 150,
+      "image_width": 3024,
+      "timestamp": 1777498789.9422421,
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "image_height": 4032,
+      "tracking_state": "normal",
+      "has_scene_depth": false,
+      "accepted_for_training": true,
+      "raw_feature_points_count": 1528,
+      "pose_quality_score": 0.9,
+      "world_mapping_status": "extending",
+      "coverage_score": 0.6
+    },
+    {
+      "camera_intrinsics": [
+        [
+          4032,
+          0,
+          1512
+        ],
+        [
+          0,
+          4032,
+          2016
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "world_mapping_status": "extending",
+      "accepted_for_training": true,
+      "has_scene_depth": false,
+      "camera_transform_world": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          1.4500000000000002
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "coverage_score": 0.6,
+      "frame_id": 29,
+      "raw_feature_points_count": 1529,
+      "tracking_state": "normal",
+      "image_path": "frames/frame_000029.jpg",
+      "image_width": 3024,
+      "timestamp": 1777498790.71011,
+      "blur_score": 150,
+      "image_height": 4032,
+      "pose_quality_score": 0.9
+    }
+  ],
+  "summary": {
+    "enhance_run": false,
+    "coverage_summary": {
+      "covered_fraction": 0.6,
+      "weak_regions": []
+    },
+    "world_mapping_status_breakdown": {
+      "extending": 30
+    },
+    "frames_captured": 30,
+    "tracking_state_breakdown": {
+      "normal": 30
+    },
+    "duration_seconds": 20.653974771499634,
+    "preview_run": false,
+    "frames_kept": 30
+  },
+  "scene_type": "room"
+}
