@@ -738,7 +738,7 @@ def _run_ar_capture_path() -> int:
     if str(_ar_capture_root()) not in sys.path:
         sys.path.insert(0, str(_ar_capture_root().parent))
     try:
-        from ar_capture_to_splat.session_layer import run_layer0  # noqa: WPS433
+        from ar_capture_to_splat.scripts.session_layer import run_layer0  # noqa: WPS433
     except ImportError as e:
         print(f"AR capture layer unavailable: {e}", file=sys.stderr)
         return 1

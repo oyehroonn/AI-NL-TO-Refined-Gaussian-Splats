@@ -1,0 +1,15 @@
+{
+  "session_id": "831e30c6",
+  "run_id": "run1__hamzaroom",
+  "video_name": "hamzaroom",
+  "scene_type_default": "room",
+  "protocol_version": 1,
+  "expires_at_unix": 1777425238,
+  "started_at_unix": 1777424338.545838,
+  "host_ip": "192.168.1.107",
+  "port": 8765,
+  "http_url": "http://192.168.1.107:8765",
+  "deep_link": "claudesplat://join?session=831e30c6&host=192.168.1.107:8765&v=1",
+  "join_url": "http://192.168.1.107:8765/join?session=831e30c6&v=1",
+  "run_dir": "/Users/oyehroonn/Downloads/AI-3D-Gaussian/AI-NL-TO-Refined-Gaussian-Splats/ar_runs/run1__hamzaroom"
+}
