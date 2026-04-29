@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Splattr</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string></string>
+	</dict>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>armv7</string>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+	<key>UIUserInterfaceStyle</key>
+	<string>Dark</string>
+
+	<!-- Custom URL scheme: scanning the laptop's QR launches Splattr directly. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.splattr.capture.join</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>claudesplat</string>
+			</array>
+		</dict>
+	</array>
+
+	<!-- ATS: laptop session server is plain HTTP on the LAN. Allow arbitrary
+	     loads for now (per AR-Layer-0 plan); tighten to the user's home
+	     subnet once a relay/HTTPS path exists. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+
+	<!-- Bonjour services for future iOS 14+ local-network privacy prompt
+	     when we add mDNS auto-discovery. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Splattr connects to the capture session running on your laptop.</string>
+
+	<!-- Camera + photo library usage (AR-Layer 0 uses plain camera; AR-Layer 2 swaps to ARKit). -->
+	<key>NSCameraUsageDescription</key>
+	<string>Splattr uses the camera to capture frames of the scene you're scanning.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Splattr can save a thumbnail of your capture to Photos.</string>
+</dict>
+</plist>
