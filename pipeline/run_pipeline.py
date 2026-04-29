@@ -704,7 +704,66 @@ def _run_layer7_interactive(
     write_metadata(meta_path, metadata)
 
 
+def _ar_capture_root() -> Path:
+    return _ROOT / "ar_capture_to_splat"
+
+
+def _dispatch_path_choice() -> Literal["upload", "ar_capture"]:
+    """First-screen menu: record-new-video vs use-existing-video."""
+    print()
+    print("How would you like to provide footage?")
+    print("  1) Use a video I already have (existing upload pipeline)")
+    print("  2) Record a new video on iPhone (AR-guided capture)")
+    print()
+    while True:
+        try:
+            raw = input("Select [1]: ").strip() or "1"
+        except EOFError:
+            print("\nAborted.", file=sys.stderr)
+            sys.exit(1)
+        if raw == "1":
+            return "upload"
+        if raw == "2":
+            return "ar_capture"
+        print("Enter 1 or 2.")
+
+
+def _run_ar_capture_path() -> int:
+    """AR-Layer 0 entry: drops the user into the capture session.
+
+    Returns a process exit code. Layer 0 stops once a capture package has
+    been received; downstream wiring (pose bridge, depth adapter, full
+    splat training from AR data) ships with AR-Layer 4+.
+    """
+    if str(_ar_capture_root()) not in sys.path:
+        sys.path.insert(0, str(_ar_capture_root().parent))
+    try:
+        from ar_capture_to_splat.session_layer import run_layer0  # noqa: WPS433
+    except ImportError as e:
+        print(f"AR capture layer unavailable: {e}", file=sys.stderr)
+        return 1
+
+    run_dir = run_layer0()
+    if run_dir is None:
+        print("AR capture cancelled / timed out.")
+        return 2
+    print()
+    print(f"Capture saved to: {run_dir}")
+    print(
+        "Next: AR-Layer 4 (pose bridge) will turn this into a COLMAP-shaped "
+        "run that the existing splat pipeline can train on. Not implemented yet."
+    )
+    return 0
+
+
 def main() -> None:
+    # First-screen dispatcher only fires when the user has NOT pre-specified
+    # a video on the CLI (the upload-pipeline shortcut bypasses the menu).
+    if "--video" not in sys.argv and "--dataset-dir" not in sys.argv:
+        choice = _dispatch_path_choice()
+        if choice == "ar_capture":
+            sys.exit(_run_ar_capture_path())
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--video",
