@@ -1,29 +1,29 @@
 //
 //  CaptureView.swift
-//  AR-Layer-0-iOS placeholder: AVCaptureSession-based grab of N stills,
-//  with a luxury HUD that previews the real ARKit experience to come.
-//  Once AR-Layer 2 lands, the body of this view replaces AVCapture with
-//  ARSession; the HUD/composition stays the same.
+//  AR-Layer 2 — live ARKit scan screen.
+//
+//  Hosts an ARSCNView preview surface, drives the ARCaptureCoordinator,
+//  shows the dark-luxury HUD: top status bar + tracking chip + radial
+//  coverage mask + bottom progress dock.
 //
 
+import ARKit
 import SwiftUI
-import AVFoundation
 
 struct CaptureView: View {
     let descriptor: SessionDescriptor
     let host: String
     let policy: CapturePolicy
-    @EnvironmentObject var router: Router
 
-    @StateObject private var camera = CameraCapture()
+    @EnvironmentObject var router: Router
+    @StateObject private var coordinator = ARCaptureCoordinator()
+
     @State private var error: String?
     @State private var configured = false
     @State private var elapsed: TimeInterval = 0
     @State private var startedAt = Date()
     @State private var ticker: Timer?
-
-    /// Frame target comes from the CapturePolicy now.
-    private var targetFrames: Int { policy.frame_budget.target }
+    @State private var sectorFractions: [Double] = Array(repeating: 0, count: 8)
 
     var body: some View {
         ZStack {
@@ -32,38 +32,48 @@ struct CaptureView: View {
             hud
         }
         .ignoresSafeArea()
-        .alert("Camera error",
+        .alert("Capture error",
                isPresented: .init(get: { error != nil },
                                   set: { if !$0 { error = nil } })) {
             Button("Back") { router.reset() }
         } message: {
             Text(error ?? "")
         }
-        .onAppear { Task { await start() } }
-        .onDisappear { stopTicker(); camera.stop() }
+        .onAppear {
+            coordinator.onFinished = { frames in
+                Task { @MainActor in
+                    stopTicker()
+                    if frames.isEmpty {
+                        router.reset()
+                    } else {
+                        router.proceedToUpload(descriptor: descriptor,
+                                                host: host,
+                                                policy: policy,
+                                                frames: frames)
+                    }
+                }
+            }
+            Task { await start() }
+        }
+        .onDisappear {
+            stopTicker()
+            coordinator.stop()
+        }
     }
 
     // MARK: pieces
 
     private var preview: some View {
-        Group {
-            if let layer = camera.previewLayer {
-                CameraPreview(layer: layer)
-            } else {
-                Theme.Color.ink
-            }
-        }
-        .ignoresSafeArea()
+        ARSCNViewContainer(session: coordinator.arSession)
+            .ignoresSafeArea()
     }
 
     private var scrim: some View {
         ZStack {
-            // top + bottom darkening for HUD legibility
             LinearGradient(colors: [.black.opacity(0.65), .clear],
                            startPoint: .top, endPoint: .center)
             LinearGradient(colors: [.clear, .black.opacity(0.85)],
                            startPoint: .center, endPoint: .bottom)
-            // amber vignette
             RadialGradient(colors: [.clear, Theme.Color.halo.opacity(0.10)],
                            center: .center,
                            startRadius: 100, endRadius: 600)
@@ -73,17 +83,34 @@ struct CaptureView: View {
 
     private var hud: some View {
         VStack(spacing: 0) {
-            // Top status bar
+            topBar
+            Spacer()
+            // Coverage mask centred behind the tracking chip.
+            ZStack {
+                CoverageMaskView(
+                    coverageFraction: coordinator.coverageFraction,
+                    sectorVisitFractions: sectorFractions
+                )
+                .frame(width: 280, height: 280)
+                VStack(spacing: 12) {
+                    Spacer()
+                    TrackingChip(guidance: coordinator.guidance)
+                }
+                .padding(.bottom, 10)
+            }
+            Spacer()
+            bottomDock
+        }
+    }
+
+    private var topBar: some View {
+        VStack(spacing: 8) {
             HStack {
                 MonoPill(label: "REC", value: timeString(elapsed))
                 Spacer()
                 MonoPill(label: "FRAMES",
-                         value: "\(camera.capturedCount)/\(targetFrames)")
+                         value: "\(coordinator.capturedCount)/\(policy.frame_budget.target)")
             }
-            .padding(.horizontal, 18)
-            .padding(.top, 60)
-
-            // Mode summary chip — set by AR-Layer 1's CapturePolicy.
             HStack {
                 Text(policy.scan_mode.uppercased())
                     .font(Theme.Font.caption(10)).tracking(1.6)
@@ -93,44 +120,33 @@ struct CaptureView: View {
                     .font(Theme.Font.mono(11))
                     .foregroundStyle(Theme.Color.textPrimary)
                 Spacer()
+                Text(coordinator.trackingStateLabel.uppercased())
+                    .font(Theme.Font.mono(10))
+                    .foregroundStyle(Theme.Color.textMuted)
             }
             .padding(.horizontal, 12).padding(.vertical, 7)
             .background(Capsule().fill(.ultraThinMaterial).environment(\.colorScheme, .dark))
             .overlay(Capsule().stroke(Theme.Color.halo.opacity(0.4), lineWidth: 0.8))
-            .padding(.horizontal, 18)
-            .padding(.top, 8)
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 60)
+    }
 
-            Spacer()
-
-            // Centre crosshair + tracking chip
-            VStack(spacing: 10) {
-                CrosshairReticle()
-                Text(trackingLabel.uppercased())
-                    .font(Theme.Font.caption(11))
-                    .tracking(2.0)
-                    .foregroundStyle(Theme.Color.halo)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(Capsule().fill(.ultraThinMaterial).environment(\.colorScheme, .dark))
-                    .overlay(Capsule().stroke(Theme.Color.halo.opacity(0.6), lineWidth: 0.8))
-                    .shadow(color: Theme.Color.halo.opacity(0.5), radius: 12)
-            }
-
-            Spacer()
-
-            // Bottom dock
-            VStack(spacing: 16) {
-                progressBlock
-                HStack(spacing: 12) {
-                    GhostButton(title: "Cancel") { router.reset() }
-                    AccentHaloButton("Stop & Upload", systemImage: "checkmark.circle.fill") {
-                        finishAndUpload()
-                    }
+    private var bottomDock: some View {
+        VStack(spacing: 16) {
+            progressBlock
+            HStack(spacing: 12) {
+                GhostButton(title: "Cancel") {
+                    coordinator.stop()
+                    router.reset()
+                }
+                AccentHaloButton("Stop & Upload", systemImage: "checkmark.circle.fill") {
+                    Task { await coordinator.finishAndDeliver() }
                 }
             }
-            .padding(.horizontal, 18)
-            .padding(.bottom, 38)
         }
+        .padding(.horizontal, 18)
+        .padding(.bottom, 38)
     }
 
     private var progressBlock: some View {
@@ -149,14 +165,8 @@ struct CaptureView: View {
     }
 
     private var progress: Double {
-        guard targetFrames > 0 else { return 0 }
-        return min(1.0, Double(camera.capturedCount) / Double(targetFrames))
-    }
-
-    private var trackingLabel: String {
-        if camera.capturedCount == 0 { return "warming up" }
-        if camera.capturedCount >= targetFrames { return "ready to upload" }
-        return "tracking · move slowly"
+        let t = max(1, policy.frame_budget.target)
+        return min(1.0, Double(coordinator.capturedCount) / Double(t))
     }
 
     // MARK: lifecycle
@@ -165,38 +175,16 @@ struct CaptureView: View {
     private func start() async {
         guard !configured else { return }
         do {
-            try await camera.configure()
+            try await coordinator.start(
+                sessionID: descriptor.session_id,
+                policy: policy,
+                cadence: CaptureSettings.cadence()
+            )
             configured = true
             startedAt = Date()
             startTicker()
-            camera.startCapturing(targetCount: targetFrames, intervalSeconds: 0.6) { frames in
-                Task { @MainActor in
-                    stopTicker()
-                    router.proceedToUpload(descriptor: descriptor,
-                                            host: host,
-                                            policy: policy,
-                                            frames: frames)
-                }
-            }
         } catch {
             self.error = error.localizedDescription
-        }
-    }
-
-    private func finishAndUpload() {
-        camera.stop()
-        stopTicker()
-        Task { @MainActor in
-            // Wait briefly for any in-flight photo to land, then route.
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            if camera.frames.isEmpty {
-                router.reset()
-            } else {
-                router.proceedToUpload(descriptor: descriptor,
-                                        host: host,
-                                        policy: policy,
-                                        frames: camera.frames)
-            }
         }
     }
 
@@ -205,9 +193,19 @@ struct CaptureView: View {
         ticker = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
             Task { @MainActor in
                 self.elapsed = Date().timeIntervalSince(startedAt)
+                // Pulse sector fractions so the radial mask feels alive.
+                // We don't expose per-sector visit counts publicly; approximate
+                // via coverageFraction smeared across the sectors.
+                let cov = coordinator.coverageFraction
+                self.sectorFractions = (0..<8).map { i in
+                    // give a slight phase per sector so the HUD shimmers.
+                    let phase = sin(Date().timeIntervalSince1970 * 0.9 + Double(i) * 0.4)
+                    return min(1.0, cov + 0.06 * phase)
+                }
             }
         }
     }
+
     private func stopTicker() { ticker?.invalidate(); ticker = nil }
 
     private func timeString(_ t: TimeInterval) -> String {
@@ -215,55 +213,3 @@ struct CaptureView: View {
         return String(format: "%02d:%02d", s / 60, s % 60)
     }
 }
-
-// MARK: - AVCaptureVideoPreviewLayer wrapper
-
-private struct CameraPreview: UIViewRepresentable {
-    let layer: AVCaptureVideoPreviewLayer
-    func makeUIView(context: Context) -> PreviewUIView {
-        let v = PreviewUIView()
-        v.previewLayer = layer
-        return v
-    }
-    func updateUIView(_ uiView: PreviewUIView, context: Context) { uiView.previewLayer = layer }
-}
-
-private final class PreviewUIView: UIView {
-    var previewLayer: AVCaptureVideoPreviewLayer? {
-        didSet {
-            oldValue?.removeFromSuperlayer()
-            if let l = previewLayer {
-                l.frame = bounds
-                layer.addSublayer(l)
-            }
-        }
-    }
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        previewLayer?.frame = bounds
-    }
-}
-
-// MARK: - Crosshair
-
-private struct CrosshairReticle: View {
-    @State private var rotate = false
-    var body: some View {
-        ZStack {
-            Circle()
-                .stroke(Theme.Color.halo.opacity(0.85), lineWidth: 1.0)
-                .frame(width: 92, height: 92)
-                .shadow(color: Theme.Color.halo.opacity(0.6), radius: 10)
-            Circle()
-                .trim(from: 0.0, to: 0.18)
-                .stroke(Theme.Color.halo, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                .frame(width: 110, height: 110)
-                .rotationEffect(.degrees(rotate ? 360 : 0))
-                .animation(.linear(duration: 4.0).repeatForever(autoreverses: false), value: rotate)
-            Rectangle().fill(Theme.Color.halo).frame(width: 1, height: 14)
-            Rectangle().fill(Theme.Color.halo).frame(width: 14, height: 1)
-        }
-        .onAppear { rotate = true }
-    }
-}
-

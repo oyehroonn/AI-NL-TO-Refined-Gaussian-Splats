@@ -16,6 +16,7 @@ struct JoinView: View {
     @State private var tipsLoading = true
     @State private var tips: [String] = []
     @State private var appearAnim = false
+    @State private var cadence: CaptureCadence = CaptureSettings.cadence()
 
     init(descriptor: SessionDescriptor, host: String) {
         self.descriptor = descriptor
@@ -30,6 +31,7 @@ struct JoinView: View {
                 header
                 pillsRow
                 sceneSelector
+                cadenceCard
                 tipsCard
                 Spacer(minLength: 12)
             }
@@ -95,6 +97,56 @@ struct JoinView: View {
                     }
                     .padding(.vertical, 2)
                 }
+            }
+        }
+    }
+
+    private var cadenceCard: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("CAPTURE CADENCE")
+                        .font(Theme.Font.caption(11)).tracking(2.0)
+                        .foregroundStyle(Theme.Color.textDim)
+                    Spacer()
+                    Text("ARKit frame rate")
+                        .font(Theme.Font.mono(11))
+                        .foregroundStyle(Theme.Color.textDim)
+                }
+                HStack(spacing: 10) {
+                    ForEach(CaptureCadence.allCases) { c in
+                        Button {
+                            cadence = c
+                            CaptureSettings.setCadence(c)
+                        } label: {
+                            Text(c.label.uppercased())
+                                .font(.system(size: 12, weight: .heavy))
+                                .tracking(1.4)
+                                .foregroundStyle(c == cadence ? Color.black : Theme.Color.textPrimary)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 10)
+                                .background(
+                                    Capsule().fill(
+                                        c == cadence
+                                          ? AnyShapeStyle(LinearGradient(colors: [.white, Theme.Color.halo],
+                                                                          startPoint: .topLeading,
+                                                                          endPoint: .bottomTrailing))
+                                          : AnyShapeStyle(Theme.Color.inkRaised.opacity(0.7))
+                                    )
+                                )
+                                .overlay(
+                                    Capsule().stroke(c == cadence ? Theme.Color.halo : Theme.Color.hairline,
+                                                      lineWidth: c == cadence ? 1.0 : 0.8)
+                                )
+                                .shadow(color: c == cadence ? Theme.Color.halo.opacity(0.45) : .clear, radius: 12)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Spacer()
+                }
+                Text("60 Hz: smoother HUD + faster coverage. 30 Hz: longer battery, fewer frames per second.")
+                    .font(Theme.Font.body(13))
+                    .foregroundStyle(Theme.Color.textMuted)
             }
         }
     }
