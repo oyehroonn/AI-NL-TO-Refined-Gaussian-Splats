@@ -232,3 +232,48 @@ pixels). Layer 0 stores the blob unchanged; downstream layers parse it.
 - Ack of partial frames.
 
 These are tracked for AR-Layer 1+ in `system_progress.md`.
+
+---
+
+## 6. `capture_policy` (added by AR-Layer 1)
+
+Optional top-level field in `manifest.json`. The Splattr iOS app fills it
+from the `CaptureMode` the user confirmed in the tutorial. Layer 0 parses
+it leniently — missing or malformed never blocks an upload, but the server
+logs a warning. AR-Layer 4 (pose bridge) reads it to choose reconstruction
+defaults; Layer 7 (AI report) reads it to phrase advice in mode-appropriate
+language.
+
+```jsonc
+"capture_policy": {
+  "scene_type": "room",
+  "scan_mode": "room_perimeter_sweep",        // policy id, NOT scene_type
+  "path_pattern": "perimeter_then_center",     // see allowed values below
+  "frame_budget": { "min": 60, "target": 200, "max": 320 },
+  "coverage_targets": {
+    "min_directions_8": 6,                     // out of 8 compass sectors
+    "min_orbit_score": 0.55,
+    "loop_closure_required": true
+  },
+  "distance_band_meters": { "near": 1.0, "far": 6.0 },
+  "movement": {
+    "max_speed_mps": 0.4,
+    "expect_translation": true,
+    "expect_rotation_only": false
+  },
+  "ar_features_required":  ["worldTracking"],
+  "ar_features_preferred": ["sceneDepth", "smoothedSceneDepth", "sceneReconstruction"],
+  "tutorial_run": true,
+  "tutorial_skipped": false,
+  "policy_version": 1
+}
+```
+
+### Allowed `path_pattern` values
+`orbit`, `spiral`, `perimeter_then_center`, `corridor_forward_back`,
+`facade_sweep`, `wide_arc`, `rotation_only_object`.
+
+### Defaults when absent
+The Python `parse_capture_policy()` helper returns `None`; downstream
+layers fall back to a generic room-mode default (`perimeter_then_center`,
+near=1.0, far=6.0, frame target=180).
