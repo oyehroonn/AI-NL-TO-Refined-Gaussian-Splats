@@ -32,11 +32,13 @@ actor ManifestUploader {
     func upload(
         descriptor: SessionDescriptor,
         sceneType: String,
+        policy: CapturePolicy?,
         frames: [CapturedFrame],
         progress: @Sendable @escaping (Double) -> Void = { _ in }
     ) async throws -> UploadSummary {
         let manifest = Self.makeManifest(descriptor: descriptor,
                                          sceneType: sceneType,
+                                         policy: policy,
                                          frames: frames)
         let manifestData = try JSONEncoder().encode(manifest)
 
@@ -91,6 +93,7 @@ actor ManifestUploader {
     static func makeManifest(
         descriptor: SessionDescriptor,
         sceneType: String,
+        policy: CapturePolicy?,
         frames: [CapturedFrame]
     ) -> Manifest {
         let now = Date().timeIntervalSince1970
@@ -170,6 +173,7 @@ actor ManifestUploader {
             ended_at_unix: ended,
             device: device,
             summary: summary,
+            capture_policy: policy,
             frames: mFrames
         )
     }

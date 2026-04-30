@@ -1,0 +1,15 @@
+{
+  "session_id": "14772d82",
+  "run_id": "run2__layer1_test",
+  "video_name": "layer1_test",
+  "scene_type_default": "object",
+  "protocol_version": 1,
+  "expires_at_unix": 1777525677,
+  "started_at_unix": 1777525647.53296,
+  "host_ip": "192.168.1.107",
+  "port": 8765,
+  "http_url": "http://192.168.1.107:8765",
+  "deep_link": "claudesplat://join?session=14772d82&host=192.168.1.107:8765&v=1",
+  "join_url": "http://192.168.1.107:8765/join?session=14772d82&v=1",
+  "run_dir": "/Users/oyehroonn/Downloads/AI-3D-Gaussian/AI-NL-TO-Refined-Gaussian-Splats/ar_capture_to_splat/ar_runs/run2__layer1_test"
+}

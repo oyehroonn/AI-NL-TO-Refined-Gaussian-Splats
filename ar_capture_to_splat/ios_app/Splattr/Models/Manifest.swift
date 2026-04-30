@@ -17,6 +17,7 @@ struct Manifest: Codable {
     let ended_at_unix: Double
     let device: Device
     let summary: Summary
+    let capture_policy: CapturePolicy?    // AR-Layer 1; optional on the wire
     let frames: [Frame]
 
     struct Device: Codable {

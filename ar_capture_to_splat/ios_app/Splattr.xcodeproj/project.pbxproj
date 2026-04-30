@@ -24,6 +24,15 @@
 		A100000000000000000000AE /* UploadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000BE /* UploadView.swift */; };
 		A100000000000000000000AF /* ErrorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000BF /* ErrorView.swift */; };
 		A100000000000000000000C0 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000D0 /* Assets.xcassets */; };
+		A1000000000000000000101A /* CapturePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B1A /* CapturePolicy.swift */; };
+		A1000000000000000000101B /* CaptureMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B1B /* CaptureMode.swift */; };
+		A1000000000000000000101C /* CaptureModeCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B1C /* CaptureModeCatalog.swift */; };
+		A1000000000000000000101D /* ModeCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B1D /* ModeCopy.swift */; };
+		A1000000000000000000101E /* TutorialMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B1E /* TutorialMemory.swift */; };
+		A1000000000000000000101F /* ModeDiagrams.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B1F /* ModeDiagrams.swift */; };
+		A10000000000000000001020 /* TutorialContainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B20 /* TutorialContainerView.swift */; };
+		A10000000000000000001021 /* TutorialStepView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B21 /* TutorialStepView.swift */; };
+		A10000000000000000001022 /* ModeConfirmView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B22 /* ModeConfirmView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -46,6 +55,15 @@
 		A100000000000000000000D0 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A100000000000000000000D1 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A100000000000000000000F0 /* Splattr.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Splattr.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A100000000000000000000B1A /* CapturePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapturePolicy.swift; sourceTree = "<group>"; };
+		A100000000000000000000B1B /* CaptureMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureMode.swift; sourceTree = "<group>"; };
+		A100000000000000000000B1C /* CaptureModeCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureModeCatalog.swift; sourceTree = "<group>"; };
+		A100000000000000000000B1D /* ModeCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModeCopy.swift; sourceTree = "<group>"; };
+		A100000000000000000000B1E /* TutorialMemory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TutorialMemory.swift; sourceTree = "<group>"; };
+		A100000000000000000000B1F /* ModeDiagrams.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModeDiagrams.swift; sourceTree = "<group>"; };
+		A100000000000000000000B20 /* TutorialContainerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TutorialContainerView.swift; sourceTree = "<group>"; };
+		A100000000000000000000B21 /* TutorialStepView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TutorialStepView.swift; sourceTree = "<group>"; };
+		A100000000000000000000B22 /* ModeConfirmView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModeConfirmView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -75,6 +93,8 @@
 				A1000000000000000000E012 /* Models */,
 				A1000000000000000000E013 /* Networking */,
 				A1000000000000000000E014 /* Capture */,
+				A1000000000000000000E017 /* CapturePolicy */,
+				A1000000000000000000E018 /* AppState */,
 				A1000000000000000000E015 /* UI */,
 				A1000000000000000000E016 /* Resources */,
 				A100000000000000000000D0 /* Assets.xcassets */,
@@ -136,8 +156,31 @@
 				A100000000000000000000BD /* CaptureView.swift */,
 				A100000000000000000000BE /* UploadView.swift */,
 				A100000000000000000000BF /* ErrorView.swift */,
+				A100000000000000000000B1F /* ModeDiagrams.swift */,
+				A100000000000000000000B20 /* TutorialContainerView.swift */,
+				A100000000000000000000B21 /* TutorialStepView.swift */,
+				A100000000000000000000B22 /* ModeConfirmView.swift */,
 			);
 			path = UI;
+			sourceTree = "<group>";
+		};
+		A1000000000000000000E017 /* CapturePolicy */ = {
+			isa = PBXGroup;
+			children = (
+				A100000000000000000000B1A /* CapturePolicy.swift */,
+				A100000000000000000000B1B /* CaptureMode.swift */,
+				A100000000000000000000B1C /* CaptureModeCatalog.swift */,
+				A100000000000000000000B1D /* ModeCopy.swift */,
+			);
+			path = CapturePolicy;
+			sourceTree = "<group>";
+		};
+		A1000000000000000000E018 /* AppState */ = {
+			isa = PBXGroup;
+			children = (
+				A100000000000000000000B1E /* TutorialMemory.swift */,
+			);
+			path = AppState;
 			sourceTree = "<group>";
 		};
 		A1000000000000000000E016 /* Resources */ = {
@@ -241,6 +284,15 @@
 				A100000000000000000000AD /* CaptureView.swift in Sources */,
 				A100000000000000000000AE /* UploadView.swift in Sources */,
 				A100000000000000000000AF /* ErrorView.swift in Sources */,
+				A1000000000000000000101A /* CapturePolicy.swift in Sources */,
+				A1000000000000000000101B /* CaptureMode.swift in Sources */,
+				A1000000000000000000101C /* CaptureModeCatalog.swift in Sources */,
+				A1000000000000000000101D /* ModeCopy.swift in Sources */,
+				A1000000000000000000101E /* TutorialMemory.swift in Sources */,
+				A1000000000000000000101F /* ModeDiagrams.swift in Sources */,
+				A10000000000000000001020 /* TutorialContainerView.swift in Sources */,
+				A10000000000000000001021 /* TutorialStepView.swift in Sources */,
+				A10000000000000000001022 /* ModeConfirmView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
