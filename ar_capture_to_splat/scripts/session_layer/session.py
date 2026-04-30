@@ -22,7 +22,9 @@ from typing import Any
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    # session.py lives at: <repo>/ar_capture_to_splat/scripts/session_layer/session.py
+    # parents: [0]=session_layer  [1]=scripts  [2]=ar_capture_to_splat  [3]=<repo>
+    return Path(__file__).resolve().parents[3]
 
 
 def default_ar_runs_root() -> Path:

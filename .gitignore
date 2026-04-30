@@ -1,4 +1,15 @@
+# =============================================================================
+# Secrets — NEVER commit
+# =============================================================================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# =============================================================================
 # Local third-party trees (large). See README.md for how to obtain them.
+# =============================================================================
 brush/
 colmap/
 colmap-*/
@@ -7,8 +18,87 @@ colmap-*/
 Videos_Dataset/
 videos/
 
-# Pipeline outputs (large).
-runs/
-
 # Local precomputed datasets (large).
 test_dataset/
+
+# =============================================================================
+# Pipeline outputs — every run is large and per-machine, never commit
+# =============================================================================
+runs/
+ar_runs/
+ar_capture_to_splat/ar_runs/   # legacy mis-pathed location, fixed in 2026-04-30
+target/                          # Rust/wgpu autotune cache
+demos/
+
+# Common artifact suffixes anywhere in the tree.
+*.ply
+*.npy
+*.bin
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.m4v
+
+# QR images + capture frames + log files
+qr_*.png
+*.log
+logs/
+
+# =============================================================================
+# Python
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.venv/
+venv/
+env/
+.python-version
+
+# =============================================================================
+# macOS
+# =============================================================================
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# =============================================================================
+# Xcode / iOS
+# =============================================================================
+# Per-user state — never useful in a repo
+**/xcuserdata/
+**/*.xcuserstate
+**/*.xcuserstatedata
+
+# Build outputs
+DerivedData/
+build/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.swiftpm/
+.build/
+Package.resolved
+
+# CocoaPods (in case we ever use it)
+Pods/
+
+# =============================================================================
+# Editor / OS scratch
+# =============================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+Thumbs.db
