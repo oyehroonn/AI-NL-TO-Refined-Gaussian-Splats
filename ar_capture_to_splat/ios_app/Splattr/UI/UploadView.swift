@@ -73,7 +73,7 @@ struct UploadView: View {
             }
             statusLine = "Done."
             try? await Task.sleep(nanoseconds: 350_000_000)
-            router.finished(summary: summary)
+            router.finished(summary: resp)
         } catch {
             failure = error.localizedDescription
         }

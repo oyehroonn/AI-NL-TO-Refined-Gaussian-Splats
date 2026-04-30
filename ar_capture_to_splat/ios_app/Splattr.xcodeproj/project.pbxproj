@@ -17,7 +17,6 @@
 		A100000000000000000000A7 /* Manifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B7 /* Manifest.swift */; };
 		A100000000000000000000A8 /* SessionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B8 /* SessionClient.swift */; };
 		A100000000000000000000A9 /* ManifestUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B9 /* ManifestUploader.swift */; };
-		A100000000000000000000AA /* CameraCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000BA /* CameraCapture.swift */; };
 		A100000000000000000000AB /* SplashView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000BB /* SplashView.swift */; };
 		A100000000000000000000AC /* JoinView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000BC /* JoinView.swift */; };
 		A100000000000000000000AD /* CaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000BD /* CaptureView.swift */; };
@@ -33,6 +32,19 @@
 		A10000000000000000001020 /* TutorialContainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B20 /* TutorialContainerView.swift */; };
 		A10000000000000000001021 /* TutorialStepView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B21 /* TutorialStepView.swift */; };
 		A10000000000000000001022 /* ModeConfirmView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B22 /* ModeConfirmView.swift */; };
+		A10000000000000000001023 /* DeviceCapability.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B23 /* DeviceCapability.swift */; };
+		A10000000000000000001024 /* CoverageGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B24 /* CoverageGrid.swift */; };
+		A10000000000000000001025 /* PoseQuality.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B25 /* PoseQuality.swift */; };
+		A10000000000000000001026 /* BlurDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B26 /* BlurDetector.swift */; };
+		A10000000000000000001027 /* GuidanceEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B27 /* GuidanceEngine.swift */; };
+		A10000000000000000001028 /* QualityGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B28 /* QualityGate.swift */; };
+		A10000000000000000001029 /* LoopClosureDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B29 /* LoopClosureDetector.swift */; };
+		A1000000000000000000102A /* FrameLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B2A /* FrameLogger.swift */; };
+		A1000000000000000000102B /* ARCaptureCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B2B /* ARCaptureCoordinator.swift */; };
+		A1000000000000000000102C /* ARSCNViewContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B2C /* ARSCNViewContainer.swift */; };
+		A1000000000000000000102D /* CoverageMaskView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B2D /* CoverageMaskView.swift */; };
+		A1000000000000000000102E /* TrackingChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B2E /* TrackingChip.swift */; };
+		A1000000000000000000102F /* CaptureSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B2F /* CaptureSettings.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -46,7 +58,6 @@
 		A100000000000000000000B7 /* Manifest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Manifest.swift; sourceTree = "<group>"; };
 		A100000000000000000000B8 /* SessionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionClient.swift; sourceTree = "<group>"; };
 		A100000000000000000000B9 /* ManifestUploader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManifestUploader.swift; sourceTree = "<group>"; };
-		A100000000000000000000BA /* CameraCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraCapture.swift; sourceTree = "<group>"; };
 		A100000000000000000000BB /* SplashView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashView.swift; sourceTree = "<group>"; };
 		A100000000000000000000BC /* JoinView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinView.swift; sourceTree = "<group>"; };
 		A100000000000000000000BD /* CaptureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureView.swift; sourceTree = "<group>"; };
@@ -64,6 +75,19 @@
 		A100000000000000000000B20 /* TutorialContainerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TutorialContainerView.swift; sourceTree = "<group>"; };
 		A100000000000000000000B21 /* TutorialStepView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TutorialStepView.swift; sourceTree = "<group>"; };
 		A100000000000000000000B22 /* ModeConfirmView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModeConfirmView.swift; sourceTree = "<group>"; };
+		A100000000000000000000B23 /* DeviceCapability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceCapability.swift; sourceTree = "<group>"; };
+		A100000000000000000000B24 /* CoverageGrid.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoverageGrid.swift; sourceTree = "<group>"; };
+		A100000000000000000000B25 /* PoseQuality.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PoseQuality.swift; sourceTree = "<group>"; };
+		A100000000000000000000B26 /* BlurDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlurDetector.swift; sourceTree = "<group>"; };
+		A100000000000000000000B27 /* GuidanceEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuidanceEngine.swift; sourceTree = "<group>"; };
+		A100000000000000000000B28 /* QualityGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QualityGate.swift; sourceTree = "<group>"; };
+		A100000000000000000000B29 /* LoopClosureDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopClosureDetector.swift; sourceTree = "<group>"; };
+		A100000000000000000000B2A /* FrameLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameLogger.swift; sourceTree = "<group>"; };
+		A100000000000000000000B2B /* ARCaptureCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ARCaptureCoordinator.swift; sourceTree = "<group>"; };
+		A100000000000000000000B2C /* ARSCNViewContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ARSCNViewContainer.swift; sourceTree = "<group>"; };
+		A100000000000000000000B2D /* CoverageMaskView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoverageMaskView.swift; sourceTree = "<group>"; };
+		A100000000000000000000B2E /* TrackingChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackingChip.swift; sourceTree = "<group>"; };
+		A100000000000000000000B2F /* CaptureSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureSettings.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -143,7 +167,15 @@
 		A1000000000000000000E014 /* Capture */ = {
 			isa = PBXGroup;
 			children = (
-				A100000000000000000000BA /* CameraCapture.swift */,
+				A100000000000000000000B23 /* DeviceCapability.swift */,
+				A100000000000000000000B24 /* CoverageGrid.swift */,
+				A100000000000000000000B25 /* PoseQuality.swift */,
+				A100000000000000000000B26 /* BlurDetector.swift */,
+				A100000000000000000000B27 /* GuidanceEngine.swift */,
+				A100000000000000000000B28 /* QualityGate.swift */,
+				A100000000000000000000B29 /* LoopClosureDetector.swift */,
+				A100000000000000000000B2A /* FrameLogger.swift */,
+				A100000000000000000000B2B /* ARCaptureCoordinator.swift */,
 			);
 			path = Capture;
 			sourceTree = "<group>";
@@ -160,6 +192,9 @@
 				A100000000000000000000B20 /* TutorialContainerView.swift */,
 				A100000000000000000000B21 /* TutorialStepView.swift */,
 				A100000000000000000000B22 /* ModeConfirmView.swift */,
+				A100000000000000000000B2C /* ARSCNViewContainer.swift */,
+				A100000000000000000000B2D /* CoverageMaskView.swift */,
+				A100000000000000000000B2E /* TrackingChip.swift */,
 			);
 			path = UI;
 			sourceTree = "<group>";
@@ -179,6 +214,7 @@
 			isa = PBXGroup;
 			children = (
 				A100000000000000000000B1E /* TutorialMemory.swift */,
+				A100000000000000000000B2F /* CaptureSettings.swift */,
 			);
 			path = AppState;
 			sourceTree = "<group>";
@@ -278,7 +314,6 @@
 				A100000000000000000000A7 /* Manifest.swift in Sources */,
 				A100000000000000000000A8 /* SessionClient.swift in Sources */,
 				A100000000000000000000A9 /* ManifestUploader.swift in Sources */,
-				A100000000000000000000AA /* CameraCapture.swift in Sources */,
 				A100000000000000000000AB /* SplashView.swift in Sources */,
 				A100000000000000000000AC /* JoinView.swift in Sources */,
 				A100000000000000000000AD /* CaptureView.swift in Sources */,
@@ -293,6 +328,19 @@
 				A10000000000000000001020 /* TutorialContainerView.swift in Sources */,
 				A10000000000000000001021 /* TutorialStepView.swift in Sources */,
 				A10000000000000000001022 /* ModeConfirmView.swift in Sources */,
+				A10000000000000000001023 /* DeviceCapability.swift in Sources */,
+				A10000000000000000001024 /* CoverageGrid.swift in Sources */,
+				A10000000000000000001025 /* PoseQuality.swift in Sources */,
+				A10000000000000000001026 /* BlurDetector.swift in Sources */,
+				A10000000000000000001027 /* GuidanceEngine.swift in Sources */,
+				A10000000000000000001028 /* QualityGate.swift in Sources */,
+				A10000000000000000001029 /* LoopClosureDetector.swift in Sources */,
+				A1000000000000000000102A /* FrameLogger.swift in Sources */,
+				A1000000000000000000102B /* ARCaptureCoordinator.swift in Sources */,
+				A1000000000000000000102C /* ARSCNViewContainer.swift in Sources */,
+				A1000000000000000000102D /* CoverageMaskView.swift in Sources */,
+				A1000000000000000000102E /* TrackingChip.swift in Sources */,
+				A1000000000000000000102F /* CaptureSettings.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
