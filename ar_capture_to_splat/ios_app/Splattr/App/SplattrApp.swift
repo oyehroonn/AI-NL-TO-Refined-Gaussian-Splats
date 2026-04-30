@@ -48,10 +48,17 @@ private struct RootView: View {
             SplashView()
         case .join(let descriptor, let host):
             JoinView(descriptor: descriptor, host: host)
-        case .capture(let descriptor, let host):
-            CaptureView(descriptor: descriptor, host: host)
-        case .upload(let descriptor, let host, let frames):
-            UploadView(descriptor: descriptor, host: host, frames: frames)
+        case .tutorial(let descriptor, let host, let mode):
+            TutorialContainerView(descriptor: descriptor, host: host, mode: mode)
+        case .tutorialSkippedConfirm(let descriptor, let host, let mode):
+            ModeConfirmView(mode: mode,
+                            descriptor: descriptor,
+                            host: host,
+                            tutorialSkipped: true)
+        case .capture(let descriptor, let host, let policy):
+            CaptureView(descriptor: descriptor, host: host, policy: policy)
+        case .upload(let descriptor, let host, let policy, let frames):
+            UploadView(descriptor: descriptor, host: host, policy: policy, frames: frames)
         case .done(let summary):
             DoneView(summary: summary)
         case .error(let message):

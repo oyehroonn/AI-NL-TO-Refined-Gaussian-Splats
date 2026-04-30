@@ -8,6 +8,7 @@ import SwiftUI
 struct UploadView: View {
     let descriptor: SessionDescriptor
     let host: String
+    let policy: CapturePolicy
     let frames: [CapturedFrame]
     @EnvironmentObject var router: Router
 
@@ -57,7 +58,8 @@ struct UploadView: View {
         do {
             let summary = try await ManifestUploader(host: host).upload(
                 descriptor: descriptor,
-                sceneType: descriptor.displaySceneType,
+                sceneType: policy.scene_type,
+                policy: policy,
                 frames: frames
             ) { p in
                 Task { @MainActor in

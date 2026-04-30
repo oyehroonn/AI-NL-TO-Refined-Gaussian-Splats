@@ -37,8 +37,9 @@ struct JoinView: View {
         }
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 12) {
-                AccentHaloButton("Begin Capture", systemImage: "viewfinder.circle") {
-                    router.startCapture(descriptor: descriptor, host: host)
+                AccentHaloButton("Continue", systemImage: "arrow.right") {
+                    let mode = CaptureModeCatalog.mode(for: sceneType)
+                    router.startTutorial(descriptor: descriptor, host: host, mode: mode)
                 }
                 GhostButton(title: "Cancel") { router.reset() }
             }

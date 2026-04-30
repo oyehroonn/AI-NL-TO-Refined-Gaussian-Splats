@@ -12,6 +12,7 @@ import AVFoundation
 struct CaptureView: View {
     let descriptor: SessionDescriptor
     let host: String
+    let policy: CapturePolicy
     @EnvironmentObject var router: Router
 
     @StateObject private var camera = CameraCapture()
@@ -21,7 +22,8 @@ struct CaptureView: View {
     @State private var startedAt = Date()
     @State private var ticker: Timer?
 
-    private let targetFrames = 30
+    /// Frame target comes from the CapturePolicy now.
+    private var targetFrames: Int { policy.frame_budget.target }
 
     var body: some View {
         ZStack {
@@ -80,6 +82,23 @@ struct CaptureView: View {
             }
             .padding(.horizontal, 18)
             .padding(.top, 60)
+
+            // Mode summary chip — set by AR-Layer 1's CapturePolicy.
+            HStack {
+                Text(policy.scan_mode.uppercased())
+                    .font(Theme.Font.caption(10)).tracking(1.6)
+                    .foregroundStyle(Theme.Color.halo)
+                Text("·").foregroundStyle(Theme.Color.textDim)
+                Text("\(String(format: "%.1f", policy.distance_band_meters.near))–\(String(format: "%.1f", policy.distance_band_meters.far)) m")
+                    .font(Theme.Font.mono(11))
+                    .foregroundStyle(Theme.Color.textPrimary)
+                Spacer()
+            }
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            .background(Capsule().fill(.ultraThinMaterial).environment(\.colorScheme, .dark))
+            .overlay(Capsule().stroke(Theme.Color.halo.opacity(0.4), lineWidth: 0.8))
+            .padding(.horizontal, 18)
+            .padding(.top, 8)
 
             Spacer()
 
@@ -153,7 +172,10 @@ struct CaptureView: View {
             camera.startCapturing(targetCount: targetFrames, intervalSeconds: 0.6) { frames in
                 Task { @MainActor in
                     stopTicker()
-                    router.proceedToUpload(descriptor: descriptor, host: host, frames: frames)
+                    router.proceedToUpload(descriptor: descriptor,
+                                            host: host,
+                                            policy: policy,
+                                            frames: frames)
                 }
             }
         } catch {
@@ -172,6 +194,7 @@ struct CaptureView: View {
             } else {
                 router.proceedToUpload(descriptor: descriptor,
                                         host: host,
+                                        policy: policy,
                                         frames: camera.frames)
             }
         }

@@ -13,8 +13,10 @@ final class Router: ObservableObject {
     enum Screen: Equatable {
         case splash
         case join(SessionDescriptor, host: String)
-        case capture(SessionDescriptor, host: String)
-        case upload(SessionDescriptor, host: String, frames: [CapturedFrame])
+        case tutorial(SessionDescriptor, host: String, mode: CaptureMode)
+        case tutorialSkippedConfirm(SessionDescriptor, host: String, mode: CaptureMode)
+        case capture(SessionDescriptor, host: String, policy: CapturePolicy)
+        case upload(SessionDescriptor, host: String, policy: CapturePolicy, frames: [CapturedFrame])
         case done(UploadSummary)
         case error(String)
     }
@@ -25,6 +27,8 @@ final class Router: ObservableObject {
         switch screen {
         case .splash: return "splash"
         case .join: return "join"
+        case .tutorial: return "tutorial"
+        case .tutorialSkippedConfirm: return "tutorial_confirm"
         case .capture: return "capture"
         case .upload: return "upload"
         case .done: return "done"
@@ -42,14 +46,33 @@ final class Router: ObservableObject {
         Task { await fetchSession(host: parsed.host, sessionID: parsed.sessionID) }
     }
 
-    func startCapture(descriptor: SessionDescriptor, host: String) {
-        screen = .capture(descriptor, host: host)
+    /// Called from JoinView's "Begin Capture" button.
+    /// Routes through the tutorial, then ModeConfirmView, then capture.
+    func startTutorial(descriptor: SessionDescriptor,
+                       host: String,
+                       mode: CaptureMode) {
+        screen = .tutorial(descriptor, host: host, mode: mode)
+    }
+
+    /// Used when the user hits "Skip" on a mode they've completed before.
+    func proceedToTutorialSkipped(descriptor: SessionDescriptor,
+                                  host: String,
+                                  mode: CaptureMode) {
+        screen = .tutorialSkippedConfirm(descriptor, host: host, mode: mode)
+    }
+
+    /// Called from ModeConfirmView. The CapturePolicy is built there.
+    func proceedToCapture(descriptor: SessionDescriptor,
+                          host: String,
+                          policy: CapturePolicy) {
+        screen = .capture(descriptor, host: host, policy: policy)
     }
 
     func proceedToUpload(descriptor: SessionDescriptor,
                         host: String,
+                        policy: CapturePolicy,
                         frames: [CapturedFrame]) {
-        screen = .upload(descriptor, host: host, frames: frames)
+        screen = .upload(descriptor, host: host, policy: policy, frames: frames)
     }
 
     func finished(summary: UploadSummary) {
