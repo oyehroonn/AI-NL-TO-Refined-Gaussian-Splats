@@ -16,7 +16,12 @@ final class Router: ObservableObject {
         case tutorial(SessionDescriptor, host: String, mode: CaptureMode)
         case tutorialSkippedConfirm(SessionDescriptor, host: String, mode: CaptureMode)
         case capture(SessionDescriptor, host: String, policy: CapturePolicy)
-        case upload(SessionDescriptor, host: String, policy: CapturePolicy, frames: [CapturedFrame])
+        case upload(SessionDescriptor,
+                    host: String,
+                    policy: CapturePolicy,
+                    frames: [CapturedFrame],
+                    device: Manifest.Device,
+                    summary: Manifest.Summary)
         case done(UploadSummary)
         case error(String)
     }
@@ -71,8 +76,11 @@ final class Router: ObservableObject {
     func proceedToUpload(descriptor: SessionDescriptor,
                         host: String,
                         policy: CapturePolicy,
-                        frames: [CapturedFrame]) {
-        screen = .upload(descriptor, host: host, policy: policy, frames: frames)
+                        frames: [CapturedFrame],
+                        device: Manifest.Device,
+                        summary: Manifest.Summary) {
+        screen = .upload(descriptor, host: host, policy: policy,
+                         frames: frames, device: device, summary: summary)
     }
 
     func finished(summary: UploadSummary) {

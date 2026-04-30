@@ -46,10 +46,14 @@ struct CaptureView: View {
                     if frames.isEmpty {
                         router.reset()
                     } else {
+                        let device = coordinator.manifestDevice()
+                        let summary = coordinator.manifestSummary(framesAccepted: frames.count)
                         router.proceedToUpload(descriptor: descriptor,
                                                 host: host,
                                                 policy: policy,
-                                                frames: frames)
+                                                frames: frames,
+                                                device: device,
+                                                summary: summary)
                     }
                 }
             }

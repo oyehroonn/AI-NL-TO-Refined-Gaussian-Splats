@@ -57,8 +57,13 @@ private struct RootView: View {
                             tutorialSkipped: true)
         case .capture(let descriptor, let host, let policy):
             CaptureView(descriptor: descriptor, host: host, policy: policy)
-        case .upload(let descriptor, let host, let policy, let frames):
-            UploadView(descriptor: descriptor, host: host, policy: policy, frames: frames)
+        case .upload(let descriptor, let host, let policy, let frames, let device, let summary):
+            UploadView(descriptor: descriptor,
+                       host: host,
+                       policy: policy,
+                       frames: frames,
+                       device: device,
+                       summary: summary)
         case .done(let summary):
             DoneView(summary: summary)
         case .error(let message):

@@ -1,10 +1,14 @@
 //
 //  ManifestUploader.swift
 //  Builds the multipart/form-data body for POST /upload exactly as
-//  CAPTURE_PROTOCOL.md §2 prescribes: session_id (text), manifest
-//  (manifest.json), and one `frames` part per frame using filename
-//  "frames/frame_<N>.jpg" (the laptop server treats the manifest's
-//  image_path values as authoritative).
+//  CAPTURE_PROTOCOL.md §2/§3 prescribe. AR-Layer 2 wires real values:
+//    - per-frame pose + intrinsics + tracking_state from CapturedFrame
+//    - depth + smoothed_depth multipart parts when present
+//    - device descriptor + summary built by ARCaptureCoordinator
+//
+//  Frame JPEG and depth payloads are loaded lazily from disk (CapturedFrame
+//  carries URLs — staged by FrameLogger) so memory stays bounded for long
+//  sessions.
 //
 
 import Foundation
@@ -16,34 +20,46 @@ actor ManifestUploader {
         case notHTTP
         case server(status: Int, body: String)
         case decode(String)
+        case fileRead(URL, Error)
         var errorDescription: String? {
             switch self {
             case .notHTTP: return "Bad response."
             case .server(let s, let b): return "Upload failed (HTTP \(s)). \(b)"
             case .decode(let s): return "Couldn't read laptop response: \(s)"
+            case .fileRead(let u, let e): return "Couldn't read \(u.lastPathComponent): \(e.localizedDescription)"
             }
         }
     }
 
     let host: String
-
     init(host: String) { self.host = host }
 
+    /// Build + POST.
+    /// `device` and `summary` come from ARCaptureCoordinator; passing them in
+    /// keeps the uploader pure (no AR imports) and lets fake-test scaffolds
+    /// pass mocks if we ever revive them.
     func upload(
         descriptor: SessionDescriptor,
         sceneType: String,
         policy: CapturePolicy?,
         frames: [CapturedFrame],
+        device: Manifest.Device,
+        summary: Manifest.Summary,
         progress: @Sendable @escaping (Double) -> Void = { _ in }
     ) async throws -> UploadSummary {
-        let manifest = Self.makeManifest(descriptor: descriptor,
-                                         sceneType: sceneType,
-                                         policy: policy,
-                                         frames: frames)
+
+        let manifest = Self.makeManifest(
+            descriptor: descriptor,
+            sceneType: sceneType,
+            policy: policy,
+            frames: frames,
+            device: device,
+            summary: summary
+        )
         let manifestData = try JSONEncoder().encode(manifest)
 
         let boundary = "splattr-\(UUID().uuidString)"
-        let body = Self.buildBody(
+        let body = try Self.buildBody(
             boundary: boundary,
             sessionID: descriptor.session_id,
             manifestData: manifestData,
@@ -88,81 +104,19 @@ actor ManifestUploader {
         )
     }
 
-    // MARK: - manifest construction
+    // MARK: - Manifest construction
 
     static func makeManifest(
         descriptor: SessionDescriptor,
         sceneType: String,
         policy: CapturePolicy?,
-        frames: [CapturedFrame]
+        frames: [CapturedFrame],
+        device: Manifest.Device,
+        summary: Manifest.Summary
     ) -> Manifest {
-        let now = Date().timeIntervalSince1970
         let started = (frames.first?.timestamp ?? Date()).timeIntervalSince1970
         let ended = (frames.last?.timestamp ?? Date()).timeIntervalSince1970
-
-        let identityIntr = { (w: Int, h: Int) -> [[Double]] in
-            let f = Double(max(w, h))
-            return [[f, 0, Double(w)/2.0],
-                    [0, f, Double(h)/2.0],
-                    [0, 0, 1]]
-        }
-        let stubPose = { (i: Int) -> [[Double]] in
-            let tz = 0.05 * Double(i)
-            return [[1, 0, 0, 0],
-                    [0, 1, 0, 0],
-                    [0, 0, 1, tz],
-                    [0, 0, 0, 1]]
-        }
-
-        let mFrames: [Manifest.Frame] = frames.enumerated().map { (i, f) in
-            Manifest.Frame(
-                frame_id: i,
-                timestamp: f.timestamp.timeIntervalSince1970,
-                image_path: "frames/\(filename(for: i))",
-                camera_transform_world: stubPose(i),
-                camera_intrinsics: identityIntr(f.width, f.height),
-                image_width: f.width,
-                image_height: f.height,
-                tracking_state: "normal",
-                tracking_reason: nil,
-                world_mapping_status: "extending",
-                raw_feature_points_count: 1500 + i,
-                has_scene_depth: false,
-                scene_depth_path: nil,
-                smoothed_scene_depth_path: nil,
-                pose_quality_score: 0.9,
-                blur_score: 150.0,
-                coverage_score: 0.6,
-                accepted_for_training: true
-            )
-        }
-
-        let device = Manifest.Device(
-            model: UIDevice.current.modelIdentifier,
-            os: "\(UIDevice.current.systemName) \(UIDevice.current.systemVersion)",
-            lidar_supported: false,
-            scene_reconstruction_supported: false,
-            ar_world_tracking_configuration: Manifest.ARConfig(
-                video_format: .init(
-                    width: frames.first?.width ?? 1920,
-                    height: frames.first?.height ?? 1080,
-                    fps: 30
-                ),
-                frame_semantics: [],
-                plane_detection: [],
-                scene_reconstruction: "none"
-            )
-        )
-        let summary = Manifest.Summary(
-            frames_captured: frames.count,
-            frames_kept: frames.count,
-            duration_seconds: max(0, ended - started),
-            tracking_state_breakdown: ["normal": frames.count],
-            world_mapping_status_breakdown: ["extending": frames.count],
-            coverage_summary: .init(covered_fraction: 0.6, weak_regions: []),
-            preview_run: false,
-            enhance_run: false
-        )
+        let mFrames: [Manifest.Frame] = frames.map { $0.toManifestFrame() }
         return Manifest(
             schema_version: 1,
             session_id: descriptor.session_id,
@@ -178,10 +132,6 @@ actor ManifestUploader {
         )
     }
 
-    static func filename(for index: Int) -> String {
-        String(format: "frame_%06d.jpg", index)
-    }
-
     // MARK: - multipart body
 
     static func buildBody(
@@ -189,7 +139,7 @@ actor ManifestUploader {
         sessionID: String,
         manifestData: Data,
         frames: [CapturedFrame]
-    ) -> Data {
+    ) throws -> Data {
         var data = Data()
         let crlf = "\r\n".data(using: .utf8)!
         let bnd = "--\(boundary)".data(using: .utf8)!
@@ -213,30 +163,44 @@ actor ManifestUploader {
             "Content-Type: application/json"
         ], payload: manifestData)
 
-        for (i, f) in frames.enumerated() {
-            append(headers: [
-                "Content-Disposition: form-data; name=\"frames\"; filename=\"frames/\(filename(for: i))\"",
-                "Content-Type: image/jpeg"
-            ], payload: f.jpegData)
+        for f in frames {
+            // JPEG
+            do {
+                let bytes = try Data(contentsOf: f.jpegURL)
+                append(headers: [
+                    "Content-Disposition: form-data; name=\"frames\"; filename=\"\(f.manifestImagePath)\"",
+                    "Content-Type: image/jpeg"
+                ], payload: bytes)
+            } catch {
+                throw UploadError.fileRead(f.jpegURL, error)
+            }
+            // Depth (optional)
+            if let url = f.depthURL, let path = f.manifestDepthPath {
+                do {
+                    let bytes = try Data(contentsOf: url)
+                    append(headers: [
+                        "Content-Disposition: form-data; name=\"depth\"; filename=\"\(path)\"",
+                        "Content-Type: application/octet-stream"
+                    ], payload: bytes)
+                } catch {
+                    throw UploadError.fileRead(url, error)
+                }
+            }
+            // Smoothed depth (optional)
+            if let url = f.smoothedDepthURL, let path = f.manifestSmoothedDepthPath {
+                do {
+                    let bytes = try Data(contentsOf: url)
+                    append(headers: [
+                        "Content-Disposition: form-data; name=\"depth_smoothed\"; filename=\"\(path)\"",
+                        "Content-Type: application/octet-stream"
+                    ], payload: bytes)
+                } catch {
+                    throw UploadError.fileRead(url, error)
+                }
+            }
         }
 
         data.append("--\(boundary)--\r\n".data(using: .utf8)!)
         return data
-    }
-}
-
-// MARK: - device model identifier
-
-private extension UIDevice {
-    /// e.g. "iPhone16,1" — what the AR/Splat pipeline cares about.
-    var modelIdentifier: String {
-        var sysinfo = utsname()
-        uname(&sysinfo)
-        let mirror = Mirror(reflecting: sysinfo.machine)
-        let id = mirror.children.compactMap { ch -> String? in
-            guard let v = ch.value as? Int8, v != 0 else { return nil }
-            return String(UnicodeScalar(UInt8(v)))
-        }.joined()
-        return id.isEmpty ? UIDevice.current.model : id
     }
 }

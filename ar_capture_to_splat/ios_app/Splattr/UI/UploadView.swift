@@ -10,6 +10,8 @@ struct UploadView: View {
     let host: String
     let policy: CapturePolicy
     let frames: [CapturedFrame]
+    let device: Manifest.Device
+    let summary: Manifest.Summary
     @EnvironmentObject var router: Router
 
     @State private var progress: Double = 0.0
@@ -56,11 +58,13 @@ struct UploadView: View {
     private func upload() async {
         statusLine = "Building manifest…"
         do {
-            let summary = try await ManifestUploader(host: host).upload(
+            let resp = try await ManifestUploader(host: host).upload(
                 descriptor: descriptor,
                 sceneType: policy.scene_type,
                 policy: policy,
-                frames: frames
+                frames: frames,
+                device: device,
+                summary: summary
             ) { p in
                 Task { @MainActor in
                     progress = p
