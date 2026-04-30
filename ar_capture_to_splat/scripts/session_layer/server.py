@@ -31,6 +31,16 @@ from typing import Any
 from .scene_types import SCENE_TYPES, scene_tip_set
 from .session import CaptureSession
 
+# Lenient parse for the optional `capture_policy` field embedded in
+# manifest.json by the Splattr iOS app (AR-Layer 1). Layer 0 simply records
+# any warnings — it never rejects an upload solely because the policy is
+# absent or malformed (keeps fake_phone working).
+try:
+    from ..capture_policy_layer import parse_capture_policy  # type: ignore[attr-defined]
+except Exception:  # noqa: BLE001
+    def parse_capture_policy(raw):  # type: ignore[no-redef]
+        return None, []
+
 
 log = logging.getLogger("ar_layer0.server")
 
@@ -371,6 +381,11 @@ class _Handler(BaseHTTPRequestHandler):
         ok, err, detail = _validate_manifest(manifest, expected_session_id=s.session_id)
         if not ok:
             return UploadResult(ok=False, error=err, detail=detail)
+
+        # AR-Layer 1: lenient capture_policy parse. Never blocks upload.
+        policy_obj, policy_warnings = parse_capture_policy(manifest.get("capture_policy"))
+        for w in policy_warnings:
+            log.warning("capture_policy: %s", w)
 
         # Persist files. Manifest paths are AUTHORITATIVE — every part
         # filename must match a manifest reference, and every manifest

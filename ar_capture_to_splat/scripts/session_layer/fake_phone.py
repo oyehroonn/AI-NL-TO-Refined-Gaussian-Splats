@@ -113,6 +113,30 @@ def _build_manifest(
             "preview_run": False,
             "enhance_run": False,
         },
+        # AR-Layer 1 stub policy. The real Splattr iOS app fills this from
+        # the chosen CaptureMode after the user finishes the tutorial.
+        "capture_policy": {
+            "scene_type": session.get("scene_type_default", "room"),
+            "scan_mode": "fake_phone_stub",
+            "path_pattern": "perimeter_then_center",
+            "frame_budget": {"min": 30, "target": len(frame_paths), "max": 600},
+            "coverage_targets": {
+                "min_directions_8": 4,
+                "min_orbit_score": 0.3,
+                "loop_closure_required": False,
+            },
+            "distance_band_meters": {"near": 1.0, "far": 6.0},
+            "movement": {
+                "max_speed_mps": 0.4,
+                "expect_translation": True,
+                "expect_rotation_only": False,
+            },
+            "ar_features_required": [],
+            "ar_features_preferred": [],
+            "tutorial_run": False,
+            "tutorial_skipped": True,
+            "policy_version": 1,
+        },
         "frames": frames,
     }
 
