@@ -6,7 +6,7 @@ Stages:
   1. input/input.mp4 — canonical copy of the source video
   2. extract — frames under images/ (then COLMAP renames to source/)
   3. colmap — database, sparse, undistortion via upload_to_splat/run_glomap.py
-  4. outputs/splat/ — reserved for exported .ply (Brush or manual)
+  4. outputs/output_ply/ — reserved for exported .ply (Brush or manual)
   5. metadata/run_metadata.json — updated after each stage
 
 Usage (from repo root):
@@ -240,7 +240,7 @@ def setup_logging(log_file: Path) -> None:
 
 
 def _find_exported_splat(run_dir: Path) -> str | None:
-    out = run_dir / "outputs" / "splat"
+    out = run_dir / "outputs" / "output_ply"
     if not out.is_dir():
         return None
     for pattern in ("*.ply", "*.compressed.ply"):
@@ -270,12 +270,12 @@ def run_pipeline(
     input_dir = run_dir / "input"
     meta_dir = run_dir / "metadata"
     logs_dir = run_dir / "logs"
-    outputs_splat = run_dir / "outputs" / "splat"
+    output_ply_dir = run_dir / "outputs" / "output_ply"
 
     input_dir.mkdir(parents=True)
     meta_dir.mkdir(parents=True)
     logs_dir.mkdir(parents=True)
-    outputs_splat.mkdir(parents=True)
+    output_ply_dir.mkdir(parents=True)
 
     canonical_video = input_dir / "input.mp4"
     shutil.copy2(video_path, canonical_video)
@@ -345,7 +345,7 @@ def run_pipeline(
             "colmap_sparse": str((run_dir / "sparse" / "0").resolve()),
             "colmap_log": str((run_dir / "colmap_run.log").resolve()),
             "brush_training_root": str(run_dir.resolve()),
-            "outputs_splat_dir": str(outputs_splat.resolve()),
+            "output_ply_dir": str(output_ply_dir.resolve()),
             "final_splat": None,
         },
         "stages": {},

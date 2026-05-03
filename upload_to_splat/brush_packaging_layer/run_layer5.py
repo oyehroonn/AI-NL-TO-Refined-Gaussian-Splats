@@ -73,7 +73,7 @@ def run_layer5(
     dpt_dir     = (dpt_dir     or run_dir / "dpt"           ).resolve()
     images_dir  = _resolve_images_dir(run_dir, images_dir)
     masks_dir   = (masks_dir   or run_dir / "masks"         ).resolve()
-    export_dir  = (export_dir  or run_dir / "outputs" / "splat").resolve()
+    export_dir  = (export_dir  or run_dir / "outputs" / "output_ply").resolve()
     export_dir.mkdir(parents=True, exist_ok=True)
 
     meta_dir = run_dir / "metadata"
@@ -199,11 +199,27 @@ def run_layer5(
     total_elapsed = time.perf_counter() - t_total
     result["total_elapsed_seconds"] = round(total_elapsed, 1)
 
+    if brush_ok and not final_ply:
+        result["brush"]["ok"] = False
+        result["brush"]["warning"] = (
+            f"Brush exited 0 but wrote no .ply to {export_dir}. "
+            "Training likely stopped before any export interval fired. "
+            "Lower export_every or check the brush log."
+        )
+        brush_ok = False
+
     if verbose:
-        status = "✓ complete" if brush_ok else f"✗ failed (code {proc.returncode})"
+        if brush_ok:
+            status = "✓ complete"
+        elif proc.returncode != 0:
+            status = f"✗ failed (code {proc.returncode})"
+        else:
+            status = "✗ no splat exported"
         print(f"\n[Layer 5] Brush {status} in {brush_elapsed:.0f}s")
         if final_ply:
             print(f"[Layer 5] Splat → {final_ply}")
+        elif "warning" in result["brush"]:
+            print(f"[Layer 5] WARNING: {result['brush']['warning']}")
 
     _write_meta(meta_dir, result)
     return result

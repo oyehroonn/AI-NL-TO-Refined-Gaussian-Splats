@@ -192,7 +192,7 @@ def run_quality_analysis(
     Parameters
     ----------
     run_dir          : pipeline run root (e.g. runs/20260415T120000Z_myvideo/)
-    ply_path         : explicit path to .ply (default: auto-detect in outputs/splat/)
+    ply_path         : explicit path to .ply (default: auto-detect in outputs/output_ply/)
     verbose          : print progress lines
     save_heatmaps    : write per-view error PNGs to layer6_heatmaps/
     save_numpy_grids : save .npy coverage/density arrays to run_dir/
@@ -208,7 +208,7 @@ def run_quality_analysis(
 
     # ── Auto-detect PLY path ──────────────────────────────────────────────────
     if ply_path is None:
-        splat_dir = run_dir / "outputs" / "splat"
+        splat_dir = run_dir / "outputs" / "output_ply"
         candidates = sorted(splat_dir.glob("*.ply")) if splat_dir.is_dir() else []
         if candidates:
             ply_path = candidates[-1]   # take the most recently written

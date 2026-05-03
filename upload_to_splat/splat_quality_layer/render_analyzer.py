@@ -5,10 +5,10 @@ Compares Brush eval renders (saved during training) against the original
 input frames to compute pixel-level quality metrics and error heatmaps.
 
 Brush eval convention (eval_save_to_disk=True):
-  outputs/splat/eval/<step>/<image_name>.png   — rendered held-out frame
+  outputs/output_ply/eval_<step>/<image_name>.png   — rendered held-out frame
 
-We walk eval/ for the LATEST checkpoint folder and match renders to their
-source images by filename stem.
+We walk for the LATEST eval_<step>/ checkpoint folder and match renders to
+their source images by filename stem.
 
 Metrics per view:
   PSNR  — Peak Signal-to-Noise Ratio (higher = better; >30 dB is good)

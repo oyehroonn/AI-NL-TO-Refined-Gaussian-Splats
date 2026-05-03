@@ -43,7 +43,7 @@ class BrushRunConfig:
     max_splats: int = 10_000_000
     eval_split_every: int = 8           # hold out every 8th image for eval metrics
     eval_save_to_disk: bool = True      # write rendered eval images alongside PLY
-    export_every: int | None = None     # None = auto (export once at end)
+    export_every: int | None = None     # None = auto (~4 checkpoints across training)
     eval_every: int = 2000              # how often to run eval during training
 
     def effective_refine_every(self, n_registered_images: int) -> int:
@@ -56,7 +56,11 @@ class BrushRunConfig:
     def effective_export_every(self) -> int:
         if self.export_every is not None:
             return self.export_every
-        return self.total_steps   # one export at the very end
+        # Brush's training loop is `0..total_steps` (exclusive), so an
+        # export_every == total_steps never fires. Use total_steps // 4 so we
+        # land ~4 checkpoints across the run and always have a viewable .ply
+        # even if training crashes or is interrupted before completion.
+        return max(500, self.total_steps // 4)
 
 
 _PRESETS: dict[str, BrushRunConfig] = {
