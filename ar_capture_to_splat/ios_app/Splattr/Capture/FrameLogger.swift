@@ -49,6 +49,10 @@ final class FrameLogger {
     }
 
     /// Stage one accepted frame. Returns nil on file-write failure.
+    ///
+    /// `timestamp` MUST already be a Unix-epoch seconds value. ARFrame.timestamp
+    /// is mach-time seconds since boot — the coordinator converts it before
+    /// calling here so on-disk + manifest timestamps are real wall-clock dates.
     func write(
         id: Int,
         timestamp: TimeInterval,
@@ -144,12 +148,14 @@ final class FrameLogger {
     // MARK: - Internal: JPEG encode
 
     private func encodeJPEG(_ pixelBuffer: CVPixelBuffer, to url: URL) -> Int? {
+        // Keep the image in ARKit's native sensor orientation (landscape).
+        // `camera.imageResolution` and `camera.intrinsics` describe THIS
+        // orientation; rotating the JPEG without rotating the matrices
+        // breaks any downstream COLMAP / pose-bridge ingest. Frame-quality
+        // scoring on the laptop (blur/exposure/motion/dedup) is
+        // orientation-independent, so landscape is fine end to end.
         let ci = CIImage(cvPixelBuffer: pixelBuffer)
-        // ARKit camera frames come in landscape regardless of device
-        // orientation; rotate to portrait so the laptop's frame_quality
-        // layer can score them without re-orienting.
-        let rotated = ci.oriented(.right)
-        guard let cg = ciContext.createCGImage(rotated, from: rotated.extent) else { return nil }
+        guard let cg = ciContext.createCGImage(ci, from: ci.extent) else { return nil }
         let ui = UIImage(cgImage: cg)
         guard let data = ui.jpegData(compressionQuality: 0.85) else { return nil }
         do {

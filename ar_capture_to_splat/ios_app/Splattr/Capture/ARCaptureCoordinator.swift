@@ -56,6 +56,14 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
     private var lastHUDPushAt: TimeInterval = 0
     private var startedAt: Date = Date()
 
+    /// Wall-clock-to-mach-time bridge. ARFrame.timestamp is mach-time
+    /// seconds since system boot, NOT a Unix epoch. We sample
+    /// `Date().timeIntervalSince1970 - frame.timestamp` once on the first
+    /// observed frame and reuse it for every subsequent frame so on-disk
+    /// + manifest timestamps are real wall-clock dates.
+    private var unixEpochOffset: TimeInterval = 0
+    private var hasUnixEpochOffset: Bool = false
+
     /// Called when the session naturally finishes (target reached / loop closed
     /// / user stop). The argument is the final accepted-frames array.
     var onFinished: (([CapturedFrame]) -> Void)?
@@ -106,6 +114,8 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
         mappingHistogram.removeAll()
         totalFramesObserved = 0
         startedAt = Date()
+        unixEpochOffset = 0
+        hasUnixEpochOffset = false
         capturedCount = 0
         coverageFraction = 0
         guidance = .init(label: "warming up", level: .normal)
@@ -282,13 +292,24 @@ extension ARCaptureCoordinator {
         totalFramesObserved += 1
         loopDetector.observe(frame: frame)
 
+        // Compute the wall-clock offset once on the first observed frame.
+        // ARFrame.timestamp is mach-time seconds since system boot, so we
+        // bridge it to Unix epoch by sampling Date() against the very first
+        // frame's timestamp and reusing the offset for every subsequent frame.
+        if !hasUnixEpochOffset {
+            unixEpochOffset = Date().timeIntervalSince1970 - frame.timestamp
+            hasUnixEpochOffset = true
+        }
+
         // Histograms (every observed frame, not just accepted).
         let ts = PoseQuality.trackingStateLabel(frame.camera.trackingState)
         trackingHistogram[ts, default: 0] += 1
         let ws = PoseQuality.worldMappingStatusLabel(frame.worldMappingStatus)
         mappingHistogram[ws, default: 0] += 1
 
-        // Speed estimate from previous frame.
+        // Speed estimate from previous frame. Internal time math stays on
+        // the mach clock — we only convert to Unix when we hand the
+        // timestamp to FrameLogger for the manifest.
         let now = frame.timestamp
         var recentSpeed: Double = 0
         if let lastT = lastObservedTimestamp,
