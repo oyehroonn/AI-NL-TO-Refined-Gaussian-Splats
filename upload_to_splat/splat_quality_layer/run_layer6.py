@@ -6,7 +6,7 @@ CLI entry point and pipeline-callable function.
 
 Usage (standalone):
   PYTHONPATH=upload_to_splat python -m splat_quality_layer.run_layer6 --run-dir runs/<id>
-  PYTHONPATH=upload_to_splat python -m splat_quality_layer.run_layer6 --run-dir runs/... --ply outputs/splat/splat.ply
+  PYTHONPATH=upload_to_splat python -m splat_quality_layer.run_layer6 --run-dir runs/... --ply outputs/output_ply/splat.ply
 
 Pipeline call:
   from splat_quality_layer.run_layer6 import run_layer6
@@ -34,8 +34,8 @@ def run_layer6(
 
     Parameters
     ----------
-    run_dir          : pipeline run root (must contain outputs/splat/*.ply,
-                       sparse/0/, optionally dpt/ and outputs/splat/eval/)
+    run_dir          : pipeline run root (must contain outputs/output_ply/*.ply,
+                       sparse/0/, optionally dpt/ and outputs/output_ply/eval_<iter>/)
     ply_path         : explicit .ply path (auto-detected if None)
     verbose          : print progress
     save_heatmaps    : write per-view error PNGs to layer6_heatmaps/
@@ -80,7 +80,7 @@ def main() -> None:
         type=Path,
         default=None,
         dest="ply_path",
-        help="Explicit path to the .ply file (default: auto-detect in outputs/splat/).",
+        help="Explicit path to the .ply file (default: auto-detect in outputs/output_ply/).",
     )
     parser.add_argument(
         "--no-heatmaps",

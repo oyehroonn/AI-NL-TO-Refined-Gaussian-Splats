@@ -92,22 +92,26 @@ def _find_eval_renders(run_dir: Path) -> list[_EvalMatch]:
     """
     Find the latest Brush eval render folder and match renders → sources.
 
-    Brush saves to:  run_dir/outputs/splat/eval/<step>/<image_name>.png
+    Brush saves to:  run_dir/outputs/output_ply/eval_<step>/<image_name>.png
     Source images:   run_dir/source/<image_name>  (or images/)
     """
-    eval_root = run_dir / "outputs" / "splat" / "eval"
+    eval_root = run_dir / "outputs" / "output_ply"
     if not eval_root.is_dir():
         return []
 
-    # Pick the step folder with the highest number (= latest checkpoint)
-    step_dirs = sorted(
-        [d for d in eval_root.iterdir() if d.is_dir() and d.name.isdigit()],
-        key=lambda d: int(d.name),
-    )
+    # Brush names eval folders `eval_<iter>` (e.g. eval_2000). Pick the
+    # one with the highest iter number — that's the latest checkpoint.
+    step_dirs: list[tuple[int, Path]] = []
+    for d in eval_root.iterdir():
+        if not d.is_dir() or not d.name.startswith("eval_"):
+            continue
+        suffix = d.name[len("eval_"):]
+        if suffix.isdigit():
+            step_dirs.append((int(suffix), d))
     if not step_dirs:
         return []
-    latest_step = step_dirs[-1]
-    step_num = int(latest_step.name)
+    step_dirs.sort(key=lambda t: t[0])
+    step_num, latest_step = step_dirs[-1]
 
     # Find source image directory (COLMAP renames images/ → source/)
     source_dir: Path | None = None
@@ -210,7 +214,7 @@ def analyze_renders(
     matches = _find_eval_renders(run_dir)
     if not matches:
         result["error"] = (
-            "No eval renders found. Expected outputs/splat/eval/<step>/<name>.png. "
+            "No eval renders found. Expected outputs/output_ply/eval_<iter>/<name>.png. "
             "Ensure eval_save_to_disk=True in brush_config.py (it is by default)."
         )
         return result

@@ -212,9 +212,63 @@ def _safe_run_id_fragment(name: str, max_len: int = 48) -> str:
     return (s[:max_len] if s else "video") or "video"
 
 
-def default_run_id(video_path: Path) -> str:
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return f"{ts}_{_safe_run_id_fragment(video_path.stem)}"
+def _next_alpha_prefix(runs_root: Path) -> str:
+    """
+    Return the next prefix in the A0..A10, B0..B10, ... Z10, AA0..AA10, AB0..
+    sequence, based on which prefixes already exist under runs_root/.
+
+    Counter wraps from <letters>10 to <next-letters>0. Letter sequence
+    extends naturally A..Z, then AA..AZ, BA..BZ, ... so we never run out.
+    """
+    import re
+
+    prefix_re = re.compile(r"^([A-Z]+)(\d+)(?:__|$)")
+    used: dict[str, int] = {}   # letters -> highest counter seen
+    if runs_root.is_dir():
+        for child in runs_root.iterdir():
+            if not child.is_dir():
+                continue
+            m = prefix_re.match(child.name)
+            if not m:
+                continue
+            letters, num = m.group(1), int(m.group(2))
+            if num > used.get(letters, -1):
+                used[letters] = num
+
+    def _bump_letters(s: str) -> str:
+        # AAA-style increment with carry: A→B, Z→AA, AZ→BA, ZZ→AAA
+        chars = list(s)
+        i = len(chars) - 1
+        while i >= 0:
+            if chars[i] == "Z":
+                chars[i] = "A"
+                i -= 1
+            else:
+                chars[i] = chr(ord(chars[i]) + 1)
+                return "".join(chars)
+        return "A" + "".join(chars)
+
+    # Find the latest letters block (longest first, then alphabetic) and bump it
+    if used:
+        latest = max(used, key=lambda k: (len(k), k))
+        n = used[latest]
+        if n < 10:
+            return f"{latest}{n + 1}"
+        return f"{_bump_letters(latest)}0"
+    return "A0"
+
+
+def default_run_id(video_path: Path, runs_root: Path | None = None) -> str:
+    """
+    Run id: <prefix>__<videoname>, e.g. A0__myvideo, A1__myvideo, ... A10__,
+    B0__, B10__, C0__, ..., Z10__, AA0__, AA10__, AB0__, etc.
+
+    runs_root defaults to <repo_root>/runs/.
+    """
+    if runs_root is None:
+        runs_root = repo_root() / "runs"
+    prefix = _next_alpha_prefix(runs_root)
+    return f"{prefix}__{_safe_run_id_fragment(video_path.stem)}"
 
 
 def write_metadata(path: Path, data: dict[str, Any]) -> None:
@@ -262,7 +316,7 @@ def run_pipeline(
         raise FileNotFoundError(video_path)
 
     cfg.validate()
-    rid = run_id or default_run_id(video_path)
+    rid = run_id or default_run_id(video_path, runs_root=cfg.runs_root)
     run_dir = (cfg.runs_root / rid).resolve()
     if run_dir.exists():
         raise FileExistsError(f"Run directory already exists: {run_dir}")
