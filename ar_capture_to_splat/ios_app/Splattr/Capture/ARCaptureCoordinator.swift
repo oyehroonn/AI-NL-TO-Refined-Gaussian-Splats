@@ -365,9 +365,10 @@ extension ARCaptureCoordinator {
             // FrameLogger.write must run on main (MainActor) but the heavy
             // bytes work happens in CIContext on a worker pool internally,
             // so we just call it here.
+            let unixTs = frame.timestamp + unixEpochOffset
             if let captured = logger.write(
                 id: frameID,
-                timestamp: now,
+                timestamp: unixTs,
                 arFrame: frame,
                 blurScore: blurScore,
                 coverageScore: coverageScore,
