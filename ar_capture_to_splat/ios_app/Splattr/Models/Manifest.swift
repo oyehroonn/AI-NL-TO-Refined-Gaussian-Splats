@@ -18,6 +18,15 @@ struct Manifest: Codable {
     let summary: Summary
     let capture_policy: CapturePolicy?    // AR-Layer 1; optional on the wire
     let frames: [Frame]
+    /// Path to the ARWorldMap sidecar inside the upload (`world_map.arworldmap`).
+    /// Nil when worldMap export failed or device didn't reach mapped state.
+    let world_map_path: String?
+    /// Path to the sceneReconstruction mesh inside the upload (`scene_mesh.obj`).
+    /// Nil on devices without LiDAR / without mesh anchors.
+    let mesh_path: String?
+    /// Path to the rejected-frames log (`rejected_frames.json`). Always present
+    /// when at least one frame was rejected during the session.
+    let rejected_frames_path: String?
 
     struct Device: Codable {
         let model: String
@@ -60,7 +69,9 @@ struct Manifest: Codable {
     struct Frame: Codable {
         let frame_id: Int
         let timestamp: Double
-        let image_path: String
+        /// Path to the JPEG inside the upload. Nil only for rejected-frame
+        /// records (carried for negative-training signal).
+        let image_path: String?
         let camera_transform_world: [[Double]]
         let camera_intrinsics: [[Double]]
         let image_width: Int
@@ -73,14 +84,46 @@ struct Manifest: Codable {
         let has_scene_depth: Bool
         let scene_depth_path: String?
         let smoothed_scene_depth_path: String?
+        /// Per-pixel uint8 confidence side-car for `scene_depth_path`
+        /// (Apple values 0/1/2 per ARDepthData docs; 2 = high confidence).
+        let depth_confidence_path: String?
+        /// Per-frame raw feature points dump
+        /// (`feature_points/frame_<id>.bin`, see CAPTURE_PROTOCOL.md §3).
+        let feature_points_path: String?
         let pose_quality_score: Double?
         let blur_score: Double?
         let coverage_score: Double?
+        /// True if the JPEG was captured via `captureHighResolutionFrame`
+        /// (sharper still). False when only the preview-resolution stream
+        /// was available.
+        let captured_high_resolution: Bool?
+        /// Apple radiometric values for inter-frame color normalization.
+        let exposure: Exposure?
+        /// EXIF dict (ISO, shutter, white-balance gains) when available.
+        let exif: ExifData?
         let accepted_for_training: Bool
+        /// Reason a frame was excluded (only set when accepted_for_training=false).
+        let reject_reason: String?
 
         struct LightEstimate: Codable {
             let ambient_intensity: Double
             let ambient_color_temperature: Double
+        }
+
+        struct Exposure: Codable {
+            /// Seconds. From `frame.camera.exposureDuration`.
+            let exposure_duration_seconds: Double
+            /// Stops applied by ARKit, from `frame.camera.exposureOffset`.
+            let exposure_offset_stops: Double
+        }
+
+        struct ExifData: Codable {
+            let iso: Double?
+            let shutter_speed_seconds: Double?
+            /// White balance gains as RGB multipliers, when available.
+            let white_balance_rgb_gains: [Double]?
+            /// Lens position in [0,1] from camera AF system, when available.
+            let lens_position: Double?
         }
     }
 }
@@ -94,10 +137,12 @@ struct CapturedFrame: Equatable, Hashable {
     let id: Int
     let timestamp: Date
 
-    // On-disk staging.
-    let jpegURL: URL
+    // On-disk staging. `jpegURL` is nil only for rejected-frame records.
+    let jpegURL: URL?
     let depthURL: URL?
     let smoothedDepthURL: URL?
+    let depthConfidenceURL: URL?
+    let featurePointsURL: URL?
 
     // Image dimensions of the JPEG.
     let width: Int
@@ -122,17 +167,41 @@ struct CapturedFrame: Equatable, Hashable {
     let poseQualityScore: Double
     let blurScore: Double
     let coverageScore: Double
-    let acceptedForTraining: Bool       // always true when in this struct
+    let acceptedForTraining: Bool
+
+    /// True when the JPEG came from `captureHighResolutionFrame` rather
+    /// than the preview stream.
+    let capturedHighResolution: Bool
+
+    /// Apple radiometric data — used to normalize colors across frames.
+    let exposureDurationSeconds: Double?
+    let exposureOffsetStops: Double?
+
+    /// EXIF dict from ARFrame.exifData, when present.
+    let exifISO: Double?
+    let exifShutterSeconds: Double?
+    let exifWhiteBalanceRGBGains: [Double]?
+    let exifLensPosition: Double?
+
+    /// Set when this CapturedFrame represents a REJECTED frame (logged for
+    /// negative-training signal). The JPEG/depth URLs are nil in that case.
+    let rejectReason: String?
 }
 
 extension CapturedFrame {
 
     /// Filenames the laptop server expects for this frame (matches
     /// CAPTURE_PROTOCOL.md frames/, depth/, depth_smoothed/ layout).
-    var manifestImagePath: String      { "frames/\(Self.basename(id: id, ext: "jpg"))" }
+    var manifestImagePath: String?     { jpegURL == nil ? nil : "frames/\(Self.basename(id: id, ext: "jpg"))" }
     var manifestDepthPath: String?     { hasSceneDepth ? "depth/\(Self.basename(id: id, ext: "bin"))" : nil }
     var manifestSmoothedDepthPath: String? {
         smoothedDepthURL == nil ? nil : "depth_smoothed/\(Self.basename(id: id, ext: "bin"))"
+    }
+    var manifestConfidencePath: String? {
+        depthConfidenceURL == nil ? nil : "depth_confidence/\(Self.basename(id: id, ext: "bin"))"
+    }
+    var manifestFeaturePointsPath: String? {
+        featurePointsURL == nil ? nil : "feature_points/\(Self.basename(id: id, ext: "bin"))"
     }
 
     static func basename(id: Int, ext: String) -> String {
@@ -147,10 +216,28 @@ extension CapturedFrame {
             else { return nil }
             return .init(ambient_intensity: intensity, ambient_color_temperature: temp)
         }()
+        let exposure: Manifest.Frame.Exposure? = {
+            guard let dur = exposureDurationSeconds,
+                  let off = exposureOffsetStops
+            else { return nil }
+            return .init(exposure_duration_seconds: dur, exposure_offset_stops: off)
+        }()
+        let exif: Manifest.Frame.ExifData? = {
+            if exifISO == nil, exifShutterSeconds == nil,
+               exifWhiteBalanceRGBGains == nil, exifLensPosition == nil {
+                return nil
+            }
+            return .init(
+                iso: exifISO,
+                shutter_speed_seconds: exifShutterSeconds,
+                white_balance_rgb_gains: exifWhiteBalanceRGBGains,
+                lens_position: exifLensPosition
+            )
+        }()
         return Manifest.Frame(
             frame_id: id,
             timestamp: timestamp.timeIntervalSince1970,
-            image_path: manifestImagePath,
+            image_path: manifestImagePath ?? "",
             camera_transform_world: cameraTransformRows,
             camera_intrinsics: cameraIntrinsicsRows,
             image_width: width,
@@ -163,10 +250,16 @@ extension CapturedFrame {
             has_scene_depth: hasSceneDepth,
             scene_depth_path: manifestDepthPath,
             smoothed_scene_depth_path: manifestSmoothedDepthPath,
+            depth_confidence_path: manifestConfidencePath,
+            feature_points_path: manifestFeaturePointsPath,
             pose_quality_score: poseQualityScore,
             blur_score: blurScore,
             coverage_score: coverageScore,
-            accepted_for_training: acceptedForTraining
+            captured_high_resolution: capturedHighResolution,
+            exposure: exposure,
+            exif: exif,
+            accepted_for_training: acceptedForTraining,
+            reject_reason: rejectReason
         )
     }
 }
