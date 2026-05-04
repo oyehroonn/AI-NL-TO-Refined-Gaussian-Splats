@@ -75,6 +75,22 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
     private var unixEpochOffset: TimeInterval = 0
     private var hasUnixEpochOffset: Bool = false
 
+    /// `captureHighResolutionFrame` is best-effort and may fail if another
+    /// is in flight. We serialize requests with this flag so we don't
+    /// stampede the API; on failure we fall back to the preview frame.
+    private var highResInFlight: Bool = false
+
+    /// True when AR-Layer 3 should request HR stills for accepted frames.
+    /// Defaults to true on capable devices (set in `start(...)`).
+    private var enableHighResolutionStills: Bool = false
+
+    /// World-map sidecar export status — set by finishAndDeliver.
+    private(set) var didExportWorldMap: Bool = false
+    /// Mesh sidecar export status — set by finishAndDeliver.
+    private(set) var didExportMesh: Bool = false
+    /// Rejected-frames JSON sidecar export status.
+    private(set) var didExportRejectedFrames: Bool = false
+
     /// Called when the session naturally finishes (target reached / loop closed
     /// / user stop). The argument is the final accepted-frames array.
     var onFinished: (([CapturedFrame]) -> Void)?
@@ -127,6 +143,11 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
         startedAt = Date()
         unixEpochOffset = 0
         hasUnixEpochOffset = false
+        highResInFlight = false
+        didExportWorldMap = false
+        didExportMesh = false
+        didExportRejectedFrames = false
+        enableHighResolutionStills = capability.supportsHighResolutionFrameCapture
         capturedCount = 0
         coverageFraction = 0
         guidance = .init(label: "warming up", level: .normal)
@@ -150,17 +171,62 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
     }
 
     /// Called by CaptureView when the user taps "Stop & Upload" or when stop
-    /// conditions fire automatically. Exports the worldMap then routes the
-    /// caller via `onFinished`.
+    /// conditions fire automatically. Exports the worldMap, snapshots the
+    /// sceneReconstruction mesh, writes the rejected-frames JSON, then
+    /// routes the caller via `onFinished`.
     func finishAndDeliver() async {
         if isRunning { arSession.pause() }
         if let logger = frameLogger {
+            // 1. WorldMap sidecar.
             await loopDetector.exportWorldMap(from: arSession,
                                               to: logger.worldMapURL)
+            didExportWorldMap = FileManager.default.fileExists(atPath: logger.worldMapURL.path)
+
+            // 2. Mesh sidecar (sceneReconstruction).
+            didExportMesh = MeshSerializer.writeOBJ(from: arSession, to: logger.meshURL)
+
+            // 3. Rejected-frames JSON sidecar (negative-training signal).
+            didExportRejectedFrames = writeRejectedFramesJSON(to: logger.rejectedFramesURL)
         }
         isRunning = false
         let snapshot = frames
         onFinished?(snapshot)
+    }
+
+    /// Encodes every rejected frame's metadata to disk so the laptop can
+    /// study WHY frames were filtered out (blur, tracking, cooldown, etc.).
+    /// Returns true when the file was written.
+    private func writeRejectedFramesJSON(to url: URL) -> Bool {
+        let rejected = frames.filter { !$0.acceptedForTraining }
+        guard !rejected.isEmpty else { return false }
+        let payload: [[String: Any]] = rejected.map { f in
+            var dict: [String: Any] = [
+                "frame_id":              f.id,
+                "timestamp":             f.timestamp.timeIntervalSince1970,
+                "tracking_state":        f.trackingState,
+                "world_mapping_status":  f.worldMappingStatus,
+                "blur_score":            f.blurScore,
+                "coverage_score":        f.coverageScore,
+                "pose_quality_score":    f.poseQualityScore,
+                "raw_feature_points_count": f.rawFeaturePointsCount,
+                "reject_reason":         f.rejectReason ?? "unknown",
+            ]
+            if let r = f.trackingReason { dict["tracking_reason"] = r }
+            if let i = f.lightAmbientIntensity { dict["ambient_intensity"] = i }
+            if let t = f.lightAmbientColorTemperature { dict["ambient_color_temperature"] = t }
+            return dict
+        }
+        do {
+            let data = try JSONSerialization.data(
+                withJSONObject: ["rejected_frames": payload],
+                options: [.prettyPrinted, .sortedKeys]
+            )
+            try data.write(to: url, options: .atomic)
+            return true
+        } catch {
+            NSLog("[Coordinator] rejected_frames write failed: \(error.localizedDescription)")
+            return false
+        }
     }
 
     // MARK: - Manifest helpers (used by ManifestUploader)
@@ -203,6 +269,12 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
 
     /// Sidecar file URL for the worldMap. Nil if we haven't started yet.
     var worldMapSidecarURL: URL? { frameLogger?.worldMapURL }
+
+    /// Sidecar URL for the sceneReconstruction OBJ snapshot.
+    var meshSidecarURL: URL? { frameLogger?.meshURL }
+
+    /// Sidecar URL for rejected_frames.json.
+    var rejectedFramesSidecarURL: URL? { frameLogger?.rejectedFramesURL }
 
     // MARK: - Permission
 
