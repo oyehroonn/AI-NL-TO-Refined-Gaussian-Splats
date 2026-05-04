@@ -45,6 +45,7 @@
 		A1000000000000000000102D /* CoverageMaskView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B2D /* CoverageMaskView.swift */; };
 		A1000000000000000000102E /* TrackingChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B2E /* TrackingChip.swift */; };
 		A1000000000000000000102F /* CaptureSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B2F /* CaptureSettings.swift */; };
+		A10000000000000000001030 /* MeshSerializer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B30 /* MeshSerializer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -88,6 +89,7 @@
 		A100000000000000000000B2D /* CoverageMaskView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoverageMaskView.swift; sourceTree = "<group>"; };
 		A100000000000000000000B2E /* TrackingChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackingChip.swift; sourceTree = "<group>"; };
 		A100000000000000000000B2F /* CaptureSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureSettings.swift; sourceTree = "<group>"; };
+		A100000000000000000000B30 /* MeshSerializer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshSerializer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -175,6 +177,7 @@
 				A100000000000000000000B28 /* QualityGate.swift */,
 				A100000000000000000000B29 /* LoopClosureDetector.swift */,
 				A100000000000000000000B2A /* FrameLogger.swift */,
+				A100000000000000000000B30 /* MeshSerializer.swift */,
 				A100000000000000000000B2B /* ARCaptureCoordinator.swift */,
 			);
 			path = Capture;
@@ -336,6 +339,7 @@
 				A10000000000000000001028 /* QualityGate.swift in Sources */,
 				A10000000000000000001029 /* LoopClosureDetector.swift in Sources */,
 				A1000000000000000000102A /* FrameLogger.swift in Sources */,
+				A10000000000000000001030 /* MeshSerializer.swift in Sources */,
 				A1000000000000000000102B /* ARCaptureCoordinator.swift in Sources */,
 				A1000000000000000000102C /* ARSCNViewContainer.swift in Sources */,
 				A1000000000000000000102D /* CoverageMaskView.swift in Sources */,

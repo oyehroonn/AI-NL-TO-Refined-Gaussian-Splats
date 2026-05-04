@@ -48,12 +48,23 @@ struct CaptureView: View {
                     } else {
                         let device = coordinator.manifestDevice()
                         let summary = coordinator.manifestSummary(framesAccepted: frames.count)
+                        // Sidecar URLs are only meaningful when their
+                        // corresponding export succeeded — gate each.
+                        let worldMap = coordinator.didExportWorldMap
+                            ? coordinator.worldMapSidecarURL : nil
+                        let mesh = coordinator.didExportMesh
+                            ? coordinator.meshSidecarURL : nil
+                        let rejected = coordinator.didExportRejectedFrames
+                            ? coordinator.rejectedFramesSidecarURL : nil
                         router.proceedToUpload(descriptor: descriptor,
                                                 host: host,
                                                 policy: policy,
                                                 frames: frames,
                                                 device: device,
-                                                summary: summary)
+                                                summary: summary,
+                                                worldMapURL: worldMap,
+                                                meshURL: mesh,
+                                                rejectedFramesURL: rejected)
                     }
                 }
             }

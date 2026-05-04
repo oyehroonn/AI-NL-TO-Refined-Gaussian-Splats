@@ -53,6 +53,8 @@ _FRAME_PART_DIRS = {
     "frames": "frames",
     "depth": "depth",
     "depth_smoothed": "depth_smoothed",
+    "depth_confidence": "depth_confidence",
+    "feature_points": "feature_points",
 }
 
 
@@ -62,6 +64,11 @@ class UploadResult:
     frames_received: int = 0
     depth_received: int = 0
     smoothed_depth_received: int = 0
+    confidence_received: int = 0
+    feature_points_received: int = 0
+    rejected_frames_count: int = 0
+    has_world_map: bool = False
+    has_mesh: bool = False
     tracking_state_breakdown: dict[str, int] | None = None
     error: str | None = None
     detail: Any | None = None
@@ -115,7 +122,9 @@ def _text_response(
 # ---------------------------------------------------------------------------
 
 
-_REQUIRED_FRAME_FIELDS = (
+# Required for accepted frames (those with on-disk JPEG/depth payloads).
+# Rejected frames carry the same metadata MINUS image_path (no JPEG on disk).
+_REQUIRED_FRAME_FIELDS_ACCEPTED = (
     "frame_id",
     "timestamp",
     "image_path",
@@ -125,6 +134,13 @@ _REQUIRED_FRAME_FIELDS = (
     "image_height",
     "tracking_state",
     "accepted_for_training",
+)
+_REQUIRED_FRAME_FIELDS_REJECTED = (
+    "frame_id",
+    "timestamp",
+    "tracking_state",
+    "accepted_for_training",
+    "reject_reason",
 )
 
 _REQUIRED_SESSION_FIELDS = (
@@ -153,9 +169,11 @@ def _validate_manifest(manifest: dict, expected_session_id: str) -> tuple[bool, 
         if not isinstance(fr, dict):
             bad.append({"reason": "not_object"})
             continue
-        for k in _REQUIRED_FRAME_FIELDS:
+        accepted = bool(fr.get("accepted_for_training", True))
+        required = _REQUIRED_FRAME_FIELDS_ACCEPTED if accepted else _REQUIRED_FRAME_FIELDS_REJECTED
+        for k in required:
             if k not in fr:
-                bad.append({"frame_id": fr.get("frame_id"), "missing": k})
+                bad.append({"frame_id": fr.get("frame_id"), "missing": k, "accepted": accepted})
                 break
     if bad:
         return False, "manifest_bad_frames", bad[:25]
@@ -167,11 +185,16 @@ def _referenced_paths(manifest: dict) -> set[str]:
     out: set[str] = set()
     for fr in manifest.get("frames", []):
         ip = fr.get("image_path")
-        if isinstance(ip, str):
+        if isinstance(ip, str) and ip:
             out.add(ip)
-        for k in ("scene_depth_path", "smoothed_scene_depth_path"):
+        for k in (
+            "scene_depth_path",
+            "smoothed_scene_depth_path",
+            "depth_confidence_path",
+            "feature_points_path",
+        ):
             v = fr.get(k)
-            if isinstance(v, str):
+            if isinstance(v, str) and v:
                 out.add(v)
     return out
 
@@ -306,6 +329,12 @@ class _Handler(BaseHTTPRequestHandler):
                     "run_id": self.server.session.run_id,
                     "frames_received": result.frames_received,
                     "depth_received": result.depth_received,
+                    "smoothed_depth_received": result.smoothed_depth_received,
+                    "confidence_received": result.confidence_received,
+                    "feature_points_received": result.feature_points_received,
+                    "rejected_frames_count": result.rejected_frames_count,
+                    "has_world_map": result.has_world_map,
+                    "has_mesh": result.has_mesh,
                     "tracking_state_breakdown": result.tracking_state_breakdown or {},
                 },
             )
@@ -438,9 +467,15 @@ class _Handler(BaseHTTPRequestHandler):
             encoding="utf-8",
         )
 
-        # Optional flat parts (single-file each).
+        # Optional flat parts (single-file each). New AR-Layer 3 sidecars:
+        #   world_map        → ARWorldMap archive (consumed by AR-Layer 4)
+        #   mesh             → sceneReconstruction OBJ
+        #   rejected_frames  → JSON log of frames the iOS gate dropped
+        #   thumbnail        → one picked still for UI use
         for single_field, single_target in (
+            ("world_map", "world_map.arworldmap"),
             ("mesh", "scene_mesh"),  # extension preserved
+            ("rejected_frames", "rejected_frames.json"),
             ("thumbnail", "thumbnail.jpg"),
         ):
             item = form[single_field] if single_field in form else None
@@ -462,13 +497,27 @@ class _Handler(BaseHTTPRequestHandler):
 
         depth_received = sum(1 for p in seen_paths if p.startswith("depth/"))
         smoothed_received = sum(1 for p in seen_paths if p.startswith("depth_smoothed/"))
+        confidence_received = sum(1 for p in seen_paths if p.startswith("depth_confidence/"))
+        feature_points_received = sum(1 for p in seen_paths if p.startswith("feature_points/"))
         frames_received = sum(1 for p in seen_paths if p.startswith("frames/"))
+        rejected_count = sum(
+            1 for fr in manifest.get("frames", [])
+            if isinstance(fr, dict) and not fr.get("accepted_for_training", True)
+        )
+        has_world_map = (capture_dir / "world_map.arworldmap").is_file()
+        # mesh extension is preserved by the OBJ-or-PLY branch above
+        has_mesh = any(p.name.startswith("scene_mesh") for p in capture_dir.iterdir())
 
         return UploadResult(
             ok=True,
             frames_received=frames_received,
             depth_received=depth_received,
             smoothed_depth_received=smoothed_received,
+            confidence_received=confidence_received,
+            feature_points_received=feature_points_received,
+            rejected_frames_count=rejected_count,
+            has_world_map=has_world_map,
+            has_mesh=has_mesh,
             tracking_state_breakdown=tracking_breakdown,
         )
 

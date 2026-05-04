@@ -74,15 +74,19 @@ ClaudeSplat app to continue." Mostly diagnostic.
 Multipart upload of the capture package. **The single most important
 endpoint.** Body must be `multipart/form-data` with these parts:
 
-| Part name        | Filename pattern         | Content-Type    | Required | Notes |
-|------------------|--------------------------|-----------------|----------|-------|
-| `session_id`     | (form field)             | text/plain      | yes      | Must match `/session` |
-| `manifest`       | `manifest.json`          | application/json | yes     | See §3 |
-| `frames`         | `frames/frame_<N>.jpg`   | image/jpeg      | yes (1+) | One part per accepted frame |
-| `depth`          | `depth/frame_<N>.bin`    | application/octet-stream | optional | Per-frame raw depth (when LiDAR present) |
-| `depth_smoothed` | `depth_smoothed/frame_<N>.bin` | application/octet-stream | optional | smoothedSceneDepth |
-| `mesh`           | `scene_mesh.obj` or `.ply` | application/octet-stream | optional | sceneReconstruction polygon mesh |
-| `thumbnail`      | `thumbnail.jpg`          | image/jpeg      | optional | One picked still for UI use |
+| Part name          | Filename pattern                  | Content-Type    | Required | Notes |
+|--------------------|-----------------------------------|-----------------|----------|-------|
+| `session_id`       | (form field)                      | text/plain      | yes      | Must match `/session` |
+| `manifest`         | `manifest.json`                   | application/json | yes     | See §3 |
+| `frames`           | `frames/frame_<N>.jpg`            | image/jpeg      | yes (1+) | One part per accepted frame |
+| `depth`            | `depth/frame_<N>.bin`             | application/octet-stream | optional | Per-frame raw depth (when LiDAR present) |
+| `depth_smoothed`   | `depth_smoothed/frame_<N>.bin`    | application/octet-stream | optional | smoothedSceneDepth |
+| `depth_confidence` | `depth_confidence/frame_<N>.bin`  | application/octet-stream | optional | uint8 confidence map (0/1/2 per ARDepthData) |
+| `feature_points`   | `feature_points/frame_<N>.bin`    | application/octet-stream | optional | rawFeaturePoints — sparse cloud + persistent IDs |
+| `world_map`        | `world_map.arworldmap`            | application/octet-stream | optional | NSKeyedArchiver ARWorldMap (consumed by AR-Layer 4) |
+| `mesh`             | `scene_mesh.obj` or `.ply`        | application/octet-stream | optional | sceneReconstruction polygon mesh, world-space |
+| `rejected_frames`  | `rejected_frames.json`            | application/json | optional | Negative-training signal: per-rejected-frame metadata + reject reason |
+| `thumbnail`        | `thumbnail.jpg`                   | image/jpeg      | optional | One picked still for UI use |
 
 The server validates that:
 - `session_id` matches the active session (else 403).
@@ -101,6 +105,12 @@ returns:
   "run_id": "run3__kitchen_counter",
   "frames_received": 184,
   "depth_received": 184,
+  "smoothed_depth_received": 184,
+  "confidence_received": 184,
+  "feature_points_received": 184,
+  "rejected_frames_count": 92,
+  "has_world_map": true,
+  "has_mesh": true,
   "tracking_state_breakdown": {"normal": 178, "limited": 6, "notAvailable": 0}
 }
 ```
@@ -172,39 +182,99 @@ contract the iOS app (AR-Layer 3) must produce.
       "has_scene_depth": true,
       "scene_depth_path": "depth/frame_000184.bin",
       "smoothed_scene_depth_path": "depth_smoothed/frame_000184.bin",
+      "depth_confidence_path": "depth_confidence/frame_000184.bin",
+      "feature_points_path":   "feature_points/frame_000184.bin",
       "pose_quality_score": 0.93,
       "blur_score": 142.5,
       "coverage_score": 0.71,
-      "accepted_for_training": true
+      "captured_high_resolution": true,
+      "exposure": {
+        "exposure_duration_seconds": 0.0166,
+        "exposure_offset_stops": -0.3
+      },
+      "exif": {
+        "iso": 320,
+        "shutter_speed_seconds": 0.0166,
+        "white_balance_rgb_gains": [1.94, 1.0, 1.62],
+        "lens_position": null
+      },
+      "accepted_for_training": true,
+      "reject_reason": null
     }
-  ]
+  ],
+  "world_map_path":        "world_map.arworldmap",
+  "mesh_path":             "scene_mesh.obj",
+  "rejected_frames_path":  "rejected_frames.json"
 }
 ```
 
-### Required per-frame fields
-`frame_id`, `timestamp`, `image_path`, `camera_transform_world` (4×4 row-major,
-ARKit world-frame → camera), `camera_intrinsics` (3×3), `image_width`,
-`image_height`, `tracking_state` (`normal` | `limited` | `notAvailable`),
-`accepted_for_training`.
+### Required per-frame fields (accepted frames)
+`frame_id`, `timestamp` (Unix epoch seconds — *not* ARFrame.timestamp mach time),
+`image_path`, `camera_transform_world` (4×4 row-major, ARKit world-frame → camera),
+`camera_intrinsics` (3×3), `image_width`, `image_height`,
+`tracking_state` (`normal` | `limited` | `notAvailable`),
+`accepted_for_training` (true).
+
+### Required per-frame fields (rejected frames)
+`frame_id`, `timestamp`, `tracking_state`, `accepted_for_training` (false),
+`reject_reason`. **No** `image_path`, `image_width`, `image_height`, or
+`camera_*` fields are required for rejected frames — ARKit metadata is
+typically still included, but the JPEG/depth payloads are not staged on disk.
 
 ### Optional per-frame fields
 `tracking_reason` (only when `tracking_state == "limited"`: `initializing` |
 `relocalizing` | `excessiveMotion` | `insufficientFeatures` | `none`),
 `world_mapping_status` (`mapped` | `extending` | `limited` | `notAvailable`),
 `light_estimate`, `raw_feature_points_count`, `has_scene_depth`,
-`scene_depth_path`, `smoothed_scene_depth_path`, `pose_quality_score`,
-`blur_score`, `coverage_score`.
+`scene_depth_path`, `smoothed_scene_depth_path`, `depth_confidence_path`,
+`feature_points_path`, `pose_quality_score`, `blur_score`, `coverage_score`,
+`captured_high_resolution`, `exposure`, `exif`, `reject_reason`.
 
 ### Required session-level fields
 `schema_version`, `session_id`, `run_id`, `started_at_unix`,
 `ended_at_unix`, `device.model`, `summary.frames_kept`, `frames`.
 
-### Depth blob format
-`depth/frame_<N>.bin` is raw little-endian `float32`, row-major, with shape
-declared in a per-frame side-car field (TBD when AR-Layer 2 ships — until
-then the iOS app pads each blob with a 16-byte header: `uint32 width,
-uint32 height, uint32 stride_bytes, uint32 reserved`, followed by raw
-pixels). Layer 0 stores the blob unchanged; downstream layers parse it.
+### Optional session-level fields
+`world_map_path`, `mesh_path`, `rejected_frames_path` — references to the
+sidecar parts in §2 (e.g. `"world_map.arworldmap"`, `"scene_mesh.obj"`,
+`"rejected_frames.json"`). Each is set when its corresponding multipart
+part was uploaded; absent or null otherwise.
+
+### Per-frame binary side-car formats
+
+All per-frame `.bin` files use a 16-byte little-endian header followed by a
+raw payload. Layer 0 stores the blob unchanged; downstream layers parse it.
+
+**Depth (`depth/`, `depth_smoothed/`)** — `float32` row-major depth.
+Header: `uint32 width, uint32 height, uint32 stride_bytes, uint32 reserved`.
+Reader **must** use `stride_bytes` (not `width*4`) to honour any pixel-buffer
+padding ARKit may introduce in future formats.
+
+**Depth confidence (`depth_confidence/`)** — `uint8` row-major. Values are
+ARDepthData confidence levels: `0` = low, `1` = medium, `2` = high. Same
+header as depth.
+
+**Raw feature points (`feature_points/`)** —
+Header: `char[4]='FPTS', uint32 count, uint64 reserved`. Then
+`count × { float32 x, float32 y, float32 z, uint64 identifier }` (20 bytes
+per point). The `identifier` is ARKit's persistent feature ID across frames
+— useful for triangulation/track linking in COLMAP-style ingest.
+
+### Top-level sidecars
+
+**`world_map.arworldmap`** — `NSKeyedArchiver`-encoded `ARWorldMap`. iOS
+writes this via `ARSession.getCurrentWorldMap` at session end. Consumed by
+AR-Layer 4 (pose bridge) for world-coordinate alignment and relocalization.
+
+**`scene_mesh.obj`** — Wavefront OBJ snapshot of every active `ARMeshAnchor`
+on `session.currentFrame.anchors`, vertices transformed to world space.
+Includes per-vertex normals when ARKit provides them and `g class_<n>`
+groups when `meshWithClassification` is enabled. AR-Layer 5 may use this as
+a dense init prior in addition to (or in place of) DPT depth maps.
+
+**`rejected_frames.json`** — JSON array of every frame the iOS QualityGate
+dropped, with timestamp, tracking state, reject reason, blur score, etc.
+Negative-training signal for downstream filtering policy tuning.
 
 ---
 

@@ -12,6 +12,9 @@ struct UploadView: View {
     let frames: [CapturedFrame]
     let device: Manifest.Device
     let summary: Manifest.Summary
+    let worldMapURL: URL?
+    let meshURL: URL?
+    let rejectedFramesURL: URL?
     @EnvironmentObject var router: Router
 
     @State private var progress: Double = 0.0
@@ -64,7 +67,10 @@ struct UploadView: View {
                 policy: policy,
                 frames: frames,
                 device: device,
-                summary: summary
+                summary: summary,
+                worldMapURL: worldMapURL,
+                meshURL: meshURL,
+                rejectedFramesURL: rejectedFramesURL
             ) { p in
                 Task { @MainActor in
                     progress = p
