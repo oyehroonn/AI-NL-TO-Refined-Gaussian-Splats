@@ -25,7 +25,18 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
 
     // MARK: - Captured frames (consumed by ManifestUploader)
 
+    /// Every frame the coordinator has produced this session — accepted AND
+    /// rejected. ManifestUploader filters by `acceptedForTraining` when it
+    /// builds multipart parts; the manifest itself carries both so the
+    /// laptop sees rejection reasons.
     private(set) var frames: [CapturedFrame] = []
+    /// Subset: only frames with a JPEG/depth on disk to upload.
+    var acceptedFrames: [CapturedFrame] {
+        frames.filter { $0.acceptedForTraining }
+    }
+    var rejectedFrames: [CapturedFrame] {
+        frames.filter { !$0.acceptedForTraining }
+    }
 
     // MARK: - Session inputs (stored from start(...))
 
