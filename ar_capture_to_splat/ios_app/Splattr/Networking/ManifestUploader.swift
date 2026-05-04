@@ -38,6 +38,10 @@ actor ManifestUploader {
     /// `device` and `summary` come from ARCaptureCoordinator; passing them in
     /// keeps the uploader pure (no AR imports) and lets fake-test scaffolds
     /// pass mocks if we ever revive them.
+    ///
+    /// `worldMapURL`, `meshURL`, `rejectedFramesURL` are optional sidecar
+    /// files staged by FrameLogger. When present they get appended to the
+    /// multipart body and referenced in the manifest's top-level fields.
     func upload(
         descriptor: SessionDescriptor,
         sceneType: String,
@@ -45,8 +49,16 @@ actor ManifestUploader {
         frames: [CapturedFrame],
         device: Manifest.Device,
         summary: Manifest.Summary,
+        worldMapURL: URL? = nil,
+        meshURL: URL? = nil,
+        rejectedFramesURL: URL? = nil,
         progress: @Sendable @escaping (Double) -> Void = { _ in }
     ) async throws -> UploadSummary {
+
+        // Filter sidecar URLs by what's actually on disk.
+        let liveWorldMapURL = sidecarIfExists(worldMapURL)
+        let liveMeshURL = sidecarIfExists(meshURL)
+        let liveRejectedURL = sidecarIfExists(rejectedFramesURL)
 
         let manifest = Self.makeManifest(
             descriptor: descriptor,
@@ -54,7 +66,10 @@ actor ManifestUploader {
             policy: policy,
             frames: frames,
             device: device,
-            summary: summary
+            summary: summary,
+            worldMapPath: liveWorldMapURL == nil ? nil : "world_map.arworldmap",
+            meshPath: liveMeshURL == nil ? nil : "scene_mesh.obj",
+            rejectedFramesPath: liveRejectedURL == nil ? nil : "rejected_frames.json"
         )
         let manifestData = try JSONEncoder().encode(manifest)
 
@@ -63,7 +78,10 @@ actor ManifestUploader {
             boundary: boundary,
             sessionID: descriptor.session_id,
             manifestData: manifestData,
-            frames: frames
+            frames: frames,
+            worldMapURL: liveWorldMapURL,
+            meshURL: liveMeshURL,
+            rejectedFramesURL: liveRejectedURL
         )
 
         var req = URLRequest(url: URL(string: "http://\(host)/upload")!)
@@ -112,7 +130,10 @@ actor ManifestUploader {
         policy: CapturePolicy?,
         frames: [CapturedFrame],
         device: Manifest.Device,
-        summary: Manifest.Summary
+        summary: Manifest.Summary,
+        worldMapPath: String? = nil,
+        meshPath: String? = nil,
+        rejectedFramesPath: String? = nil
     ) -> Manifest {
         let started = (frames.first?.timestamp ?? Date()).timeIntervalSince1970
         let ended = (frames.last?.timestamp ?? Date()).timeIntervalSince1970
@@ -128,8 +149,19 @@ actor ManifestUploader {
             device: device,
             summary: summary,
             capture_policy: policy,
-            frames: mFrames
+            frames: mFrames,
+            world_map_path: worldMapPath,
+            mesh_path: meshPath,
+            rejected_frames_path: rejectedFramesPath
         )
+    }
+
+    /// Return the URL only when the file is on disk and non-empty; otherwise nil.
+    private func sidecarIfExists(_ url: URL?) -> URL? {
+        guard let url = url else { return nil }
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let size = (attrs?[.size] as? NSNumber)?.intValue ?? 0
+        return size > 0 ? url : nil
     }
 
     // MARK: - multipart body

@@ -257,7 +257,7 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
         let weak = coverage?.weakRegions(top: 5) ?? []
         return Manifest.Summary(
             frames_captured: totalFramesObserved,
-            frames_kept: framesAccepted,
+            frames_kept: acceptedFrames.count,
             duration_seconds: Date().timeIntervalSince(startedAt),
             tracking_state_breakdown: trackingHistogram,
             world_mapping_status_breakdown: mappingHistogram,
@@ -516,6 +516,78 @@ extension ARCaptureCoordinator {
         if shouldStop(policy: policy) {
             Task { await self.finishAndDeliver() }
         }
+    }
+
+    /// Async accept path — runs the heavy capture/encode work without
+    /// blocking the ARSession delegate. Tries `captureHighResolutionFrame`
+    /// first; falls back to the preview frame on failure or timeout.
+    private func acceptAndStage(
+        triggerFrame: ARFrame,
+        frameID: Int,
+        blurScore: Double,
+        coverageScore: Double,
+        poseQualityScore: Double
+    ) async {
+        guard let logger = frameLogger else { return }
+
+        var sourceFrame: ARFrame = triggerFrame
+        var capturedHR = false
+        if enableHighResolutionStills,
+           let hr = await tryHighResolutionCapture() {
+            sourceFrame = hr
+            capturedHR = true
+        }
+        // The HR frame's timestamp is also mach-time; reuse the same offset.
+        let unixTs = sourceFrame.timestamp + unixEpochOffset
+
+        guard let captured = logger.write(
+            id: frameID,
+            timestamp: unixTs,
+            arFrame: sourceFrame,
+            blurScore: blurScore,
+            coverageScore: coverageScore,
+            poseQualityScore: poseQualityScore,
+            capturedHighResolution: capturedHR
+        ) else { return }
+
+        frames.append(captured)
+        capturedCount = acceptedFrames.count
+    }
+
+    /// Wrap `arSession.captureHighResolutionFrame` in async/await. Returns
+    /// nil when HR is not supported, when another HR capture is in flight,
+    /// or when ARKit reports an error.
+    private func tryHighResolutionCapture() async -> ARFrame? {
+        if highResInFlight { return nil }
+        highResInFlight = true
+        defer { highResInFlight = false }
+        guard #available(iOS 16.0, *) else { return nil }
+        return await withCheckedContinuation { (cont: CheckedContinuation<ARFrame?, Never>) in
+            arSession.captureHighResolutionFrame { hrFrame, _ in
+                cont.resume(returning: hrFrame)
+            }
+        }
+    }
+
+    /// Real per-cell density score: how saturated is the cell the camera
+    /// just observed, vs. the most-visited cell in the grid? Score is in
+    /// [0, 1] where 1.0 = a brand-new cell, 0.0 = already over-visited.
+    private func freshnessScore(
+        for hit: CoverageGrid.CellHit,
+        in grid: CoverageGrid
+    ) -> Double {
+        let visitsHere = grid.visits[hit.yawSector][hit.distanceBand][hit.pitchBand]
+        var maxVisits = 1
+        for y in 0..<CoverageGrid.yawSectorCount {
+            for d in 0..<CoverageGrid.distanceBandCount {
+                for p in 0..<CoverageGrid.pitchBandCount {
+                    let v = grid.visits[y][d][p]
+                    if v > maxVisits { maxVisits = v }
+                }
+            }
+        }
+        let saturation = Double(visitsHere) / Double(maxVisits)
+        return max(0.0, min(1.0, 1.0 - saturation))
     }
 
     private func shouldStop(policy: CapturePolicy) -> Bool {
