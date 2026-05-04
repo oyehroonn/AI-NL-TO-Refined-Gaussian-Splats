@@ -196,24 +196,33 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
     /// Encodes every rejected frame's metadata to disk so the laptop can
     /// study WHY frames were filtered out (blur, tracking, cooldown, etc.).
     /// Returns true when the file was written.
+    ///
+    /// JSONSerialization (unlike JSONEncoder) has no non-conforming-float
+    /// option — a single NaN/Infinity will throw "data couldn't be written
+    /// because it isn't in the correct format". We screen every Double we
+    /// hand it through `safeNumber(_:)` first.
     private func writeRejectedFramesJSON(to url: URL) -> Bool {
         let rejected = frames.filter { !$0.acceptedForTraining }
         guard !rejected.isEmpty else { return false }
         let payload: [[String: Any]] = rejected.map { f in
             var dict: [String: Any] = [
                 "frame_id":              f.id,
-                "timestamp":             f.timestamp.timeIntervalSince1970,
+                "timestamp":             safeNumber(f.timestamp.timeIntervalSince1970),
                 "tracking_state":        f.trackingState,
                 "world_mapping_status":  f.worldMappingStatus,
-                "blur_score":            f.blurScore,
-                "coverage_score":        f.coverageScore,
-                "pose_quality_score":    f.poseQualityScore,
+                "blur_score":            safeNumber(f.blurScore),
+                "coverage_score":        safeNumber(f.coverageScore),
+                "pose_quality_score":    safeNumber(f.poseQualityScore),
                 "raw_feature_points_count": f.rawFeaturePointsCount,
                 "reject_reason":         f.rejectReason ?? "unknown",
             ]
             if let r = f.trackingReason { dict["tracking_reason"] = r }
-            if let i = f.lightAmbientIntensity { dict["ambient_intensity"] = i }
-            if let t = f.lightAmbientColorTemperature { dict["ambient_color_temperature"] = t }
+            if let i = f.lightAmbientIntensity, i.isFinite {
+                dict["ambient_intensity"] = i
+            }
+            if let t = f.lightAmbientColorTemperature, t.isFinite {
+                dict["ambient_color_temperature"] = t
+            }
             return dict
         }
         do {
@@ -227,6 +236,14 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
             NSLog("[Coordinator] rejected_frames write failed: \(error.localizedDescription)")
             return false
         }
+    }
+
+    /// JSONSerialization rejects NaN/Infinity. Replace with 0 so the whole
+    /// file write doesn't fail over a single bad value. The companion
+    /// manifest already carries the "real" numeric story; this sidecar is
+    /// a debug aid.
+    private func safeNumber(_ x: Double) -> Double {
+        x.isFinite ? x : 0.0
     }
 
     // MARK: - Manifest helpers (used by ManifestUploader)

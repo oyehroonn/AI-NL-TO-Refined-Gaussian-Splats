@@ -149,21 +149,21 @@ final class FrameLogger {
             trackingState: trackingStateLabel,
             trackingReason: trackingReason,
             worldMappingStatus: mappingLabel,
-            lightAmbientIntensity: intensity.map(Double.init),
-            lightAmbientColorTemperature: temperature.map(Double.init),
+            lightAmbientIntensity: Self.finiteOrNil(intensity.map(Double.init)),
+            lightAmbientColorTemperature: Self.finiteOrNil(temperature.map(Double.init)),
             rawFeaturePointsCount: featurePointsCount,
             hasSceneDepth: depthURL != nil,
-            poseQualityScore: poseQualityScore,
-            blurScore: blurScore,
-            coverageScore: coverageScore,
+            poseQualityScore: Self.finiteOrZero(poseQualityScore),
+            blurScore: Self.finiteOrZero(blurScore),
+            coverageScore: Self.finiteOrZero(coverageScore),
             acceptedForTraining: true,
             capturedHighResolution: capturedHighResolution,
-            exposureDurationSeconds: Double(camera.exposureDuration),
-            exposureOffsetStops: Double(camera.exposureOffset),
-            exifISO: exifBag.iso,
-            exifShutterSeconds: exifBag.shutter,
-            exifWhiteBalanceRGBGains: exifBag.wbGains,
-            exifLensPosition: exifBag.lensPos,
+            exposureDurationSeconds: Self.finiteOrNil(Double(camera.exposureDuration)),
+            exposureOffsetStops: Self.finiteOrNil(Double(camera.exposureOffset)),
+            exifISO: Self.finiteOrNil(exifBag.iso),
+            exifShutterSeconds: Self.finiteOrNil(exifBag.shutter),
+            exifWhiteBalanceRGBGains: Self.finiteArrayOrNil(exifBag.wbGains),
+            exifLensPosition: Self.finiteOrNil(exifBag.lensPos),
             rejectReason: nil
         )
     }
@@ -205,21 +205,21 @@ final class FrameLogger {
             trackingState: trackingStateLabel,
             trackingReason: trackingReason,
             worldMappingStatus: mappingLabel,
-            lightAmbientIntensity: intensity.map(Double.init),
-            lightAmbientColorTemperature: temperature.map(Double.init),
+            lightAmbientIntensity: Self.finiteOrNil(intensity.map(Double.init)),
+            lightAmbientColorTemperature: Self.finiteOrNil(temperature.map(Double.init)),
             rawFeaturePointsCount: featurePointsCount,
             hasSceneDepth: false,
-            poseQualityScore: poseQualityScore,
-            blurScore: blurScore,
-            coverageScore: coverageScore,
+            poseQualityScore: Self.finiteOrZero(poseQualityScore),
+            blurScore: Self.finiteOrZero(blurScore),
+            coverageScore: Self.finiteOrZero(coverageScore),
             acceptedForTraining: false,
             capturedHighResolution: false,
-            exposureDurationSeconds: Double(camera.exposureDuration),
-            exposureOffsetStops: Double(camera.exposureOffset),
-            exifISO: exifBag.iso,
-            exifShutterSeconds: exifBag.shutter,
-            exifWhiteBalanceRGBGains: exifBag.wbGains,
-            exifLensPosition: exifBag.lensPos,
+            exposureDurationSeconds: Self.finiteOrNil(Double(camera.exposureDuration)),
+            exposureOffsetStops: Self.finiteOrNil(Double(camera.exposureOffset)),
+            exifISO: Self.finiteOrNil(exifBag.iso),
+            exifShutterSeconds: Self.finiteOrNil(exifBag.shutter),
+            exifWhiteBalanceRGBGains: Self.finiteArrayOrNil(exifBag.wbGains),
+            exifLensPosition: Self.finiteOrNil(exifBag.lensPos),
             rejectReason: rejectReason
         )
     }
@@ -316,7 +316,7 @@ final class FrameLogger {
         var rows: [[Double]] = Array(repeating: Array(repeating: 0.0, count: 4), count: 4)
         for r in 0..<4 {
             for c in 0..<4 {
-                rows[r][c] = Double(m[c][r])
+                rows[r][c] = Self.finiteOrZero(Double(m[c][r]))
             }
         }
         return rows
@@ -326,10 +326,26 @@ final class FrameLogger {
         var rows: [[Double]] = Array(repeating: Array(repeating: 0.0, count: 3), count: 3)
         for r in 0..<3 {
             for c in 0..<3 {
-                rows[r][c] = Double(m[c][r])
+                rows[r][c] = Self.finiteOrZero(Double(m[c][r]))
             }
         }
         return rows
+    }
+
+    /// JSON has no representation for NaN/±Infinity. ARKit ships NaNs for
+    /// `camera.exposureOffset` in low light and for transform/intrinsic
+    /// elements when tracking is `.notAvailable`. Strip them at the source
+    /// so they never reach the manifest encoder.
+    static func finiteOrZero(_ x: Double) -> Double {
+        x.isFinite ? x : 0.0
+    }
+    static func finiteOrNil(_ x: Double?) -> Double? {
+        guard let x = x, x.isFinite else { return nil }
+        return x
+    }
+    static func finiteArrayOrNil(_ xs: [Double]?) -> [Double]? {
+        guard let xs = xs, xs.allSatisfy({ $0.isFinite }) else { return nil }
+        return xs
     }
 
     // MARK: - Internal: confidence-map write

@@ -71,7 +71,19 @@ actor ManifestUploader {
             meshPath: liveMeshURL == nil ? nil : "scene_mesh.obj",
             rejectedFramesPath: liveRejectedURL == nil ? nil : "rejected_frames.json"
         )
-        let manifestData = try JSONEncoder().encode(manifest)
+        // Belt-and-suspenders: even though FrameLogger sanitizes at the
+        // source, configure the encoder to degrade non-finite floats to
+        // string sentinels rather than throw. JSONEncoder's default would
+        // raise EncodingError.invalidValue ("data couldn't be written
+        // because it isn't in the correct format") and abort the whole
+        // upload over a single NaN somewhere.
+        let encoder = JSONEncoder()
+        encoder.nonConformingFloatEncodingStrategy = .convertToString(
+            positiveInfinity: "+inf",
+            negativeInfinity: "-inf",
+            nan: "nan"
+        )
+        let manifestData = try encoder.encode(manifest)
 
         let boundary = "splattr-\(UUID().uuidString)"
         let body = try Self.buildBody(

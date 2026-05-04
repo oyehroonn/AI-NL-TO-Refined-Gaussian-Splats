@@ -81,8 +81,29 @@ struct UploadView: View {
             try? await Task.sleep(nanoseconds: 350_000_000)
             router.finished(summary: resp)
         } catch {
-            failure = error.localizedDescription
+            failure = Self.describe(error)
         }
+    }
+
+    /// `error.localizedDescription` for `EncodingError.invalidValue` is just
+    /// "data couldn't be written because it isn't in the correct format" —
+    /// useless for diagnosis. Inspect the case directly so the laptop
+    /// debugger sees which field/codingPath broke.
+    private static func describe(_ error: Error) -> String {
+        if let enc = error as? EncodingError {
+            switch enc {
+            case .invalidValue(let value, let ctx):
+                let path = ctx.codingPath.map { $0.stringValue }.joined(separator: ".")
+                return "Manifest encode failed at \(path.isEmpty ? "<root>" : path): " +
+                       "\(ctx.debugDescription) — value=\(value)"
+            @unknown default:
+                return "Manifest encode failed: \(enc)"
+            }
+        }
+        if let upload = error as? ManifestUploader.UploadError {
+            return upload.errorDescription ?? "\(upload)"
+        }
+        return error.localizedDescription
     }
 }
 
