@@ -326,6 +326,15 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
             cfg.videoFormat = fmt
         }
 
+        // Apple recommends switching the configuration to its
+        // high-res-still-capable video format BEFORE running the session
+        // when you intend to call `captureHighResolutionFrame`. This costs
+        // GPU/battery only when HR is supported, so we gate on capability.
+        if capability.supportsHighResolutionFrameCapture,
+           let hrFmt = capability.highResolutionStillFormat {
+            cfg.videoFormat = hrFmt
+        }
+
         return cfg
     }
 }
@@ -443,27 +452,47 @@ extension ARCaptureCoordinator {
                 trackingState: frame.camera.trackingState,
                 featurePointsCount: frame.rawFeaturePoints?.points.count ?? 0
             )
-            let coverageScore = probeHit.wasFresh ? 1.0 : 0.5
+            // Use the real per-cell density from CoverageGrid instead of a
+            // 1.0/0.5 binary. Higher = camera is sweeping new ground here.
+            let coverageScore = freshnessScore(for: probeHit, in: self.coverage ?? coverageProbe)
 
-            // FrameLogger.write must run on main (MainActor) but the heavy
-            // bytes work happens in CIContext on a worker pool internally,
-            // so we just call it here.
+            // Update the "last accepted" tracking immediately (so the gate
+            // sees correct cooldown even if HR capture takes 100-300 ms).
+            lastAcceptedTransform = frame.camera.transform
+            lastAcceptedTimestamp = now
+
+            // The accept path is async — captureHighResolutionFrame is
+            // best-effort and may take a beat. Fall back to the preview
+            // frame on any failure so we always log SOMETHING.
+            Task { [weak self, frameID, blurScore, coverageScore, poseScore] in
+                await self?.acceptAndStage(
+                    triggerFrame: frame,
+                    frameID: frameID,
+                    blurScore: blurScore,
+                    coverageScore: coverageScore,
+                    poseQualityScore: poseScore
+                )
+            }
+        } else {
+            // Log the rejected frame (no JPEG/depth on disk) so the laptop
+            // gets the negative-training signal. The id namespace is shared
+            // with accepted frames — id 0..n is monotone over the session.
+            let rejectedID = nextFrameID; nextFrameID += 1
             let unixTs = frame.timestamp + unixEpochOffset
-            if let captured = logger.write(
-                id: frameID,
+            let poseScore = PoseQuality.score(
+                trackingState: frame.camera.trackingState,
+                featurePointsCount: frame.rawFeaturePoints?.points.count ?? 0
+            )
+            let record = logger.rejectedRecord(
+                id: rejectedID,
                 timestamp: unixTs,
                 arFrame: frame,
                 blurScore: blurScore,
-                coverageScore: coverageScore,
-                poseQualityScore: poseScore
-            ) {
-                frames.append(captured)
-                capturedCount = frames.count
-                lastAcceptedTransform = frame.camera.transform
-                lastAcceptedTimestamp = now
-            }
-        } else {
-            _ = rejectReason     // available for debug if we want to log
+                coverageScore: 0.0,
+                poseQualityScore: poseScore,
+                rejectReason: rejectReason
+            )
+            frames.append(record)
         }
 
         // HUD throttle.
