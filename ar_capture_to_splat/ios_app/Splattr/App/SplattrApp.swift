@@ -57,13 +57,18 @@ private struct RootView: View {
                             tutorialSkipped: true)
         case .capture(let descriptor, let host, let policy):
             CaptureView(descriptor: descriptor, host: host, policy: policy)
-        case .upload(let descriptor, let host, let policy, let frames, let device, let summary):
+        case .upload(let descriptor, let host, let policy, let frames,
+                     let device, let summary, let worldMapURL,
+                     let meshURL, let rejectedFramesURL):
             UploadView(descriptor: descriptor,
                        host: host,
                        policy: policy,
                        frames: frames,
                        device: device,
-                       summary: summary)
+                       summary: summary,
+                       worldMapURL: worldMapURL,
+                       meshURL: meshURL,
+                       rejectedFramesURL: rejectedFramesURL)
         case .done(let summary):
             DoneView(summary: summary)
         case .error(let message):

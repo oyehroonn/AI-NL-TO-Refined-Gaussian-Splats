@@ -21,7 +21,10 @@ final class Router: ObservableObject {
                     policy: CapturePolicy,
                     frames: [CapturedFrame],
                     device: Manifest.Device,
-                    summary: Manifest.Summary)
+                    summary: Manifest.Summary,
+                    worldMapURL: URL?,
+                    meshURL: URL?,
+                    rejectedFramesURL: URL?)
         case done(UploadSummary)
         case error(String)
     }
@@ -78,9 +81,15 @@ final class Router: ObservableObject {
                         policy: CapturePolicy,
                         frames: [CapturedFrame],
                         device: Manifest.Device,
-                        summary: Manifest.Summary) {
+                        summary: Manifest.Summary,
+                        worldMapURL: URL? = nil,
+                        meshURL: URL? = nil,
+                        rejectedFramesURL: URL? = nil) {
         screen = .upload(descriptor, host: host, policy: policy,
-                         frames: frames, device: device, summary: summary)
+                         frames: frames, device: device, summary: summary,
+                         worldMapURL: worldMapURL,
+                         meshURL: meshURL,
+                         rejectedFramesURL: rejectedFramesURL)
     }
 
     func finished(summary: UploadSummary) {

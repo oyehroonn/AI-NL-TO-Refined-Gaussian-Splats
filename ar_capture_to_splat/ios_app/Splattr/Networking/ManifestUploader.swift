@@ -170,7 +170,10 @@ actor ManifestUploader {
         boundary: String,
         sessionID: String,
         manifestData: Data,
-        frames: [CapturedFrame]
+        frames: [CapturedFrame],
+        worldMapURL: URL? = nil,
+        meshURL: URL? = nil,
+        rejectedFramesURL: URL? = nil
     ) throws -> Data {
         var data = Data()
         let crlf = "\r\n".data(using: .utf8)!
@@ -195,18 +198,21 @@ actor ManifestUploader {
             "Content-Type: application/json"
         ], payload: manifestData)
 
-        for f in frames {
-            // JPEG
+        // Per-frame parts. Only accepted frames carry on-disk payloads;
+        // rejected records live only in the manifest.
+        for f in frames where f.acceptedForTraining {
+            // JPEG (required for accepted frames)
+            guard let jpegURL = f.jpegURL, let imgPath = f.manifestImagePath else { continue }
             do {
-                let bytes = try Data(contentsOf: f.jpegURL)
+                let bytes = try Data(contentsOf: jpegURL)
                 append(headers: [
-                    "Content-Disposition: form-data; name=\"frames\"; filename=\"\(f.manifestImagePath)\"",
+                    "Content-Disposition: form-data; name=\"frames\"; filename=\"\(imgPath)\"",
                     "Content-Type: image/jpeg"
                 ], payload: bytes)
             } catch {
-                throw UploadError.fileRead(f.jpegURL, error)
+                throw UploadError.fileRead(jpegURL, error)
             }
-            // Depth (optional)
+            // Depth (optional, LiDAR only)
             if let url = f.depthURL, let path = f.manifestDepthPath {
                 do {
                     let bytes = try Data(contentsOf: url)
@@ -229,6 +235,65 @@ actor ManifestUploader {
                 } catch {
                     throw UploadError.fileRead(url, error)
                 }
+            }
+            // Depth confidence (optional, LiDAR-only side-car)
+            if let url = f.depthConfidenceURL, let path = f.manifestConfidencePath {
+                do {
+                    let bytes = try Data(contentsOf: url)
+                    append(headers: [
+                        "Content-Disposition: form-data; name=\"depth_confidence\"; filename=\"\(path)\"",
+                        "Content-Type: application/octet-stream"
+                    ], payload: bytes)
+                } catch {
+                    throw UploadError.fileRead(url, error)
+                }
+            }
+            // Raw feature points (optional)
+            if let url = f.featurePointsURL, let path = f.manifestFeaturePointsPath {
+                do {
+                    let bytes = try Data(contentsOf: url)
+                    append(headers: [
+                        "Content-Disposition: form-data; name=\"feature_points\"; filename=\"\(path)\"",
+                        "Content-Type: application/octet-stream"
+                    ], payload: bytes)
+                } catch {
+                    throw UploadError.fileRead(url, error)
+                }
+            }
+        }
+
+        // Top-level sidecars (one each, optional).
+        if let url = worldMapURL {
+            do {
+                let bytes = try Data(contentsOf: url)
+                append(headers: [
+                    "Content-Disposition: form-data; name=\"world_map\"; filename=\"world_map.arworldmap\"",
+                    "Content-Type: application/octet-stream"
+                ], payload: bytes)
+            } catch {
+                throw UploadError.fileRead(url, error)
+            }
+        }
+        if let url = meshURL {
+            do {
+                let bytes = try Data(contentsOf: url)
+                append(headers: [
+                    "Content-Disposition: form-data; name=\"mesh\"; filename=\"scene_mesh.obj\"",
+                    "Content-Type: application/octet-stream"
+                ], payload: bytes)
+            } catch {
+                throw UploadError.fileRead(url, error)
+            }
+        }
+        if let url = rejectedFramesURL {
+            do {
+                let bytes = try Data(contentsOf: url)
+                append(headers: [
+                    "Content-Disposition: form-data; name=\"rejected_frames\"; filename=\"rejected_frames.json\"",
+                    "Content-Type: application/json"
+                ], payload: bytes)
+            } catch {
+                throw UploadError.fileRead(url, error)
             }
         }
 
