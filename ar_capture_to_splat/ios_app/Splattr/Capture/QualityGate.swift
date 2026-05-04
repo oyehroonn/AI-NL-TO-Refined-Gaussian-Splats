@@ -18,22 +18,30 @@ struct QualityGate {
 
     /// Build a gate for a given policy.
     init(policy: CapturePolicy) {
-        // Indoor scenes are typically low-light with motion blur sneaking in
-        // around 80–150. Outdoor scenes can be much sharper. We bias the
-        // threshold by mode: tighter for facade/outdoor, looser for room.
+        // Blur thresholds re-tuned 2026-05-04 after a real-world capture
+        // at 3840×2160 HR resolution gave only 0.5% acceptance — most
+        // rejects were `blur_below_threshold`. Laplacian variance shrinks
+        // at higher resolutions because edges are spread across more
+        // pixels, so the same physical motion blur scores lower than at
+        // 1080p. New defaults are roughly half of the old ones.
         switch policy.scan_mode {
         case CaptureMode.facade.scanModeID,
              CaptureMode.vehicle.scanModeID:
-            self.blurThreshold = 120.0
+            self.blurThreshold = 60.0   // was 120
         case CaptureMode.turntable.scanModeID:
-            self.blurThreshold = 60.0
+            self.blurThreshold = 30.0   // was 60
         default:
-            self.blurThreshold = 90.0
+            self.blurThreshold = 40.0   // was 90 — room/object/general
         }
-        // Min spacing scales with the policy distance band — see plan §3.
-        self.minDistanceMeters = (policy.distance_band_meters.near
-                                + policy.distance_band_meters.far) / 30.0
-        // Don't accept frames more often than this.
+        // Min spacing scales with the policy distance band, halved to
+        // ~12 cm for default room mode (was ~23 cm). Hard cap at 0.20 m
+        // so very large scenes don't over-space either.
+        let raw = (policy.distance_band_meters.near
+                 + policy.distance_band_meters.far) / 60.0
+        self.minDistanceMeters = min(0.20, raw)
+        // Don't accept frames more often than this. 0.05s = 20 Hz cap;
+        // ARKit runs at 60 Hz so we naturally subsample 3:1 when blur +
+        // motion are both passing.
         self.cooldownSeconds = 0.05
     }
 
