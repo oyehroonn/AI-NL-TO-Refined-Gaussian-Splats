@@ -10,7 +10,10 @@ import SwiftUI
 @MainActor
 final class Router: ObservableObject {
 
-    enum Screen: Equatable {
+    /// Screen is intentionally NOT Equatable — its payloads include
+    /// non-Equatable types (Manifest.Device / Manifest.Summary). SwiftUI
+    /// animations key on the stable `screenID` string instead.
+    enum Screen {
         case splash
         case join(SessionDescriptor, host: String)
         case tutorial(SessionDescriptor, host: String, mode: CaptureMode)
