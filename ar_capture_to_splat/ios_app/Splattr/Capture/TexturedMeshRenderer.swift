@@ -50,41 +50,184 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
             node.removeFromParentNode()
         }
         trackedNodes.removeAll()
+        anchorsByID.removeAll()
         snapshotByAnchor.removeAll()
         anchorCount = 0
         latestSnapshot = nil
     }
 
     /// Captured anchor data the post-capture explorer needs to rebuild the
-    /// mesh in its own SCNScene with collision physics. Each entry is the
-    /// world transform + a fresh copy of the SCNGeometry (with frozen UVs
-    /// + texture material) so the explorer scene can own them safely.
+    /// mesh in its own SCNScene with collision physics.
+    ///
+    /// IMPORTANT: every byte buffer below is a DEEP COPY taken at snapshot
+    /// time — never a reference to ARKit's live MTLBuffer. The AR session
+    /// keeps mutating its mesh-anchor buffers (refinement) and may free
+    /// them when an anchor is removed, which would corrupt or zero out a
+    /// shared geometry. Owning the bytes guarantees the explorer scene can
+    /// stay valid even while the AR session continues underneath.
     struct ExplorerSnapshot {
         let worldTransform: simd_float4x4
-        let geometry: SCNGeometry
+        /// Tightly-packed SIMD3<Float> vertex positions in anchor-local space.
+        let vertexData: Data
+        let vertexCount: Int
+        /// Tightly-packed SIMD3<Float> normals (may be empty).
+        let normalData: Data
+        let normalCount: Int
+        /// Triangle indices.
+        let indexData: Data
+        let triangleCount: Int
+        let bytesPerIndex: Int
+        /// Per-vertex UVs (SIMD2<Float>) baked from the frozen camera snapshot.
+        let uvData: Data
+        /// World-space AABB of the vertices after applying worldTransform.
+        let worldMin: SIMD3<Float>
+        let worldMax: SIMD3<Float>
+        /// The first-sighting RGB photo to drape on this anchor.
+        let textureImage: UIImage
     }
 
     /// Snapshot of every currently-textured anchor for hand-off to the
-    /// MeshExplorerView. Cheap — copies the SCNGeometry shell (not the
-    /// underlying Metal buffers, which are reference-counted).
+    /// MeshExplorerView. Performs a deep byte-copy of every Metal buffer so
+    /// the resulting array is fully independent of ARKit's live state.
     func snapshotForExplorer() -> [ExplorerSnapshot] {
         var out: [ExplorerSnapshot] = []
         out.reserveCapacity(trackedNodes.count)
-        for node in trackedNodes.values {
-            guard let geom = node.geometry else { continue }
-            let copied = (geom.copy() as? SCNGeometry) ?? geom
-            out.append(ExplorerSnapshot(
-                worldTransform: node.simdWorldTransform,
-                geometry: copied
-            ))
+        for (id, node) in trackedNodes {
+            guard let snap = snapshotByAnchor[id] else { continue }
+            // We need the original ARMeshAnchor to read its raw geometry
+            // buffers + transform. We don't keep a strong reference to the
+            // anchor, so re-derive everything we need from the SCN node + the
+            // frozen camera snapshot we already store.
+            //
+            // The node's geometry was rebuilt via makeTexturedGeometry which
+            // shares ARKit's buffers. Reading bytes from those sources here
+            // gets us the most-recent snapshot ARKit has emitted; we copy
+            // every byte before returning so further ARKit writes won't
+            // affect the explorer.
+            guard let owned = ownGeometry(node: node, snapshot: snap) else { continue }
+            out.append(owned)
         }
         return out
+    }
+
+    /// Read every geometry source/element on the live SCN node, copy bytes
+    /// into freshly-allocated `Data`, and bundle the texture UIImage.
+    private func ownGeometry(
+        node: SCNNode,
+        snapshot: CameraSnapshot
+    ) -> ExplorerSnapshot? {
+        guard let geom = node.geometry else { return nil }
+
+        // ── Vertices ─────────────────────────────────────────────────────
+        guard let vSrc = geom.sources(for: .vertex).first else { return nil }
+        let vertexCount = vSrc.vectorCount
+        guard vertexCount > 0 else { return nil }
+        // Re-pack into tight SIMD3<Float> layout (12 bytes/vertex). ARKit
+        // hands us 16-byte stride; SceneKit accepts either, but tight
+        // packing keeps physics-shape construction predictable.
+        var verts = [SIMD3<Float>](repeating: .zero, count: vertexCount)
+        readPackedFloat3(from: vSrc, into: &verts)
+        let vertexData = verts.withUnsafeBufferPointer { Data(buffer: $0) }
+
+        // World-space AABB (used by the explorer to spawn the player and
+        // size the physics world).
+        let xform = node.simdWorldTransform
+        var wmin = SIMD3<Float>( .infinity,  .infinity,  .infinity)
+        var wmax = SIMD3<Float>(-.infinity, -.infinity, -.infinity)
+        for v in verts {
+            let w4 = simd_mul(xform, SIMD4<Float>(v.x, v.y, v.z, 1))
+            let w = SIMD3<Float>(w4.x, w4.y, w4.z)
+            wmin = simd_min(wmin, w)
+            wmax = simd_max(wmax, w)
+        }
+
+        // ── Normals (optional) ──────────────────────────────────────────
+        var normalData = Data()
+        var normalCount = 0
+        if let nSrc = geom.sources(for: .normal).first, nSrc.vectorCount == vertexCount {
+            var normals = [SIMD3<Float>](repeating: .zero, count: vertexCount)
+            readPackedFloat3(from: nSrc, into: &normals)
+            normalData = normals.withUnsafeBufferPointer { Data(buffer: $0) }
+            normalCount = vertexCount
+        }
+
+        // ── UVs ──────────────────────────────────────────────────────────
+        // Re-derive UVs from the frozen snapshot's camera matrices — this
+        // avoids reading the live UV source whose underlying buffer we
+        // synthesised but is also fine to recompute (cheap; vertexCount
+        // points × one mat-vec each).
+        let viewProj = simd_mul(snapshot.projectionMatrix, snapshot.viewMatrix)
+        var uvs = [SIMD2<Float>](repeating: SIMD2(0.5, 0.5), count: vertexCount)
+        for i in 0..<vertexCount {
+            let p = verts[i]
+            let world = simd_mul(xform, SIMD4<Float>(p.x, p.y, p.z, 1))
+            let clip = simd_mul(viewProj, world)
+            if clip.w == 0 { continue }
+            let ndcX = clip.x / clip.w
+            let ndcY = clip.y / clip.w
+            let u = (ndcX * 0.5) + 0.5
+            let v = 1.0 - ((ndcY * 0.5) + 0.5)
+            uvs[i] = SIMD2(Float(u), Float(v))
+        }
+        let uvData = uvs.withUnsafeBufferPointer { Data(buffer: $0) }
+
+        // ── Triangle indices ────────────────────────────────────────────
+        guard let elem = geom.elements.first,
+              elem.primitiveType == .triangles,
+              elem.primitiveCount > 0 else { return nil }
+        // SCNGeometryElement gives us .data — already a Data object backed
+        // by either the original buffer or its own copy. Copying via Data
+        // initialiser is cheap and detaches us from the source.
+        let indexData = Data(elem.data)
+        let triangleCount = elem.primitiveCount
+        let bytesPerIndex = elem.bytesPerIndex
+
+        return ExplorerSnapshot(
+            worldTransform: xform,
+            vertexData: vertexData,
+            vertexCount: vertexCount,
+            normalData: normalData,
+            normalCount: normalCount,
+            indexData: indexData,
+            triangleCount: triangleCount,
+            bytesPerIndex: bytesPerIndex,
+            uvData: uvData,
+            worldMin: wmin,
+            worldMax: wmax,
+            textureImage: snapshot.image
+        )
+    }
+
+    /// Helper: read a SCNGeometrySource of float3-shaped data into a
+    /// tightly-packed SIMD3<Float> array, regardless of the source's stride
+    /// (ARKit tends to use 16-byte stride for alignment).
+    private func readPackedFloat3(
+        from src: SCNGeometrySource,
+        into out: inout [SIMD3<Float>]
+    ) {
+        let count = src.vectorCount
+        guard count > 0, count == out.count else { return }
+        let stride = src.dataStride
+        let offset = src.dataOffset
+        src.data.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            for i in 0..<count {
+                let p = base.advanced(by: offset + i * stride)
+                    .assumingMemoryBound(to: SIMD3<Float>.self)
+                out[i] = p.pointee
+            }
+        }
     }
 
     // MARK: - Internal state
 
     private weak var arSession: ARSession?
     private var trackedNodes: [UUID: SCNNode] = [:]
+    /// Strong references to the live ARMeshAnchors so we can read their raw
+    /// geometry buffers on demand (snapshotForExplorer). Without this, the
+    /// only path to vertex/index bytes is through SCNGeometrySource.data,
+    /// which is empty for MTLBuffer-based sources.
+    private var anchorsByID: [UUID: ARMeshAnchor] = [:]
     private var latestSnapshot: CameraSnapshot?
     /// Per-anchor first-sighting snapshot. Once an anchor has been textured
     /// from the camera view at the moment ARKit added it, we **freeze** that
