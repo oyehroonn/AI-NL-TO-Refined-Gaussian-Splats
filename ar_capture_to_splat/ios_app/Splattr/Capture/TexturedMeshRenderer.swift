@@ -55,6 +55,32 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         latestSnapshot = nil
     }
 
+    /// Captured anchor data the post-capture explorer needs to rebuild the
+    /// mesh in its own SCNScene with collision physics. Each entry is the
+    /// world transform + a fresh copy of the SCNGeometry (with frozen UVs
+    /// + texture material) so the explorer scene can own them safely.
+    struct ExplorerSnapshot {
+        let worldTransform: simd_float4x4
+        let geometry: SCNGeometry
+    }
+
+    /// Snapshot of every currently-textured anchor for hand-off to the
+    /// MeshExplorerView. Cheap — copies the SCNGeometry shell (not the
+    /// underlying Metal buffers, which are reference-counted).
+    func snapshotForExplorer() -> [ExplorerSnapshot] {
+        var out: [ExplorerSnapshot] = []
+        out.reserveCapacity(trackedNodes.count)
+        for node in trackedNodes.values {
+            guard let geom = node.geometry else { continue }
+            let copied = (geom.copy() as? SCNGeometry) ?? geom
+            out.append(ExplorerSnapshot(
+                worldTransform: node.simdWorldTransform,
+                geometry: copied
+            ))
+        }
+        return out
+    }
+
     // MARK: - Internal state
 
     private weak var arSession: ARSession?
