@@ -17,6 +17,7 @@ struct JoinView: View {
     @State private var tips: [String] = []
     @State private var appearAnim = false
     @State private var cadence: CaptureCadence = CaptureSettings.cadence()
+    @State private var tier: Tier = CaptureSettings.tier()
 
     init(descriptor: SessionDescriptor, host: String) {
         self.descriptor = descriptor
@@ -32,6 +33,7 @@ struct JoinView: View {
                 pillsRow
                 sceneSelector
                 cadenceCard
+                tierCard
                 tipsCard
                 Spacer(minLength: 12)
             }
@@ -151,6 +153,38 @@ struct JoinView: View {
         }
     }
 
+    private var tierCard: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("QUALITY")
+                        .font(Theme.Font.caption(11)).tracking(2.0)
+                        .foregroundStyle(Theme.Color.textDim)
+                    Spacer()
+                    Text("preview tier")
+                        .font(Theme.Font.mono(11))
+                        .foregroundStyle(Theme.Color.textDim)
+                }
+                VStack(spacing: 8) {
+                    ForEach(Tier.allCases) { t in
+                        TierRow(
+                            tier: t,
+                            selected: t == tier,
+                            disabled: !t.isAvailable
+                        ) {
+                            guard t.isAvailable else { return }
+                            tier = t
+                            CaptureSettings.setTier(t)
+                        }
+                    }
+                }
+                Text(tier.blurb)
+                    .font(Theme.Font.body(13))
+                    .foregroundStyle(Theme.Color.textMuted)
+            }
+        }
+    }
+
     private var tipsCard: some View {
         GlassCard {
             VStack(alignment: .leading, spacing: 14) {
@@ -228,5 +262,82 @@ private struct SceneChip: View {
             .shadow(color: selected ? Theme.Color.halo.opacity(0.45) : .clear, radius: 14)
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Tier row
+
+/// One selectable row in the tier card. Selected → halo-fill,
+/// unavailable → dimmed with a "soon" badge.
+private struct TierRow: View {
+    let tier: Tier
+    let selected: Bool
+    let disabled: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 12) {
+                Text(tier.displayName)
+                    .font(.system(size: 13, weight: .heavy))
+                    .tracking(1.6)
+                    .foregroundStyle(textColor)
+                Spacer()
+                Text(disabled ? "SOON" : tier.pill)
+                    .font(.system(size: 10, weight: .heavy))
+                    .tracking(1.4)
+                    .foregroundStyle(pillTextColor)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        Capsule().fill(pillBackground)
+                    )
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(rowBackground)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(rowBorder, lineWidth: selected ? 1.2 : 0.8)
+            )
+            .shadow(color: selected ? Theme.Color.halo.opacity(0.35) : .clear,
+                    radius: 14)
+            .opacity(disabled ? 0.45 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+    }
+
+    private var textColor: Color {
+        selected ? Color.black : Theme.Color.textPrimary
+    }
+
+    private var rowBackground: AnyShapeStyle {
+        if selected {
+            return AnyShapeStyle(LinearGradient(
+                colors: [.white, Theme.Color.halo],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing))
+        }
+        return AnyShapeStyle(Theme.Color.inkRaised.opacity(0.55))
+    }
+
+    private var rowBorder: Color {
+        selected ? Theme.Color.halo : Theme.Color.hairline
+    }
+
+    private var pillTextColor: Color {
+        if disabled { return Theme.Color.textMuted }
+        return selected ? Color.black : Theme.Color.halo
+    }
+
+    private var pillBackground: AnyShapeStyle {
+        if disabled { return AnyShapeStyle(Theme.Color.inkRaised.opacity(0.4)) }
+        return AnyShapeStyle(
+            (selected ? Color.black : Theme.Color.halo).opacity(selected ? 0.10 : 0.18)
+        )
     }
 }
