@@ -50,6 +50,7 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
             node.removeFromParentNode()
         }
         trackedNodes.removeAll()
+        snapshotByAnchor.removeAll()
         anchorCount = 0
         latestSnapshot = nil
     }
@@ -59,6 +60,15 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
     private weak var arSession: ARSession?
     private var trackedNodes: [UUID: SCNNode] = [:]
     private var latestSnapshot: CameraSnapshot?
+    /// Per-anchor first-sighting snapshot. Once an anchor has been textured
+    /// from the camera view at the moment ARKit added it, we **freeze** that
+    /// texture for the lifetime of the anchor. Every subsequent ARKit
+    /// `didUpdate` (which fires as the mesh is refined geometrically) reuses
+    /// this snapshot — otherwise a wall anchor refined while the camera is
+    /// pointed at the floor would silently re-texture the wall with floor
+    /// pixels. This is the heart of Option C: each face shows the real
+    /// camera RGB from when that face was first seen.
+    private var snapshotByAnchor: [UUID: CameraSnapshot] = [:]
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
 
     /// Texture target side length. 512 is plenty for the hand-held overlay
@@ -122,6 +132,7 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         let id = anchor.identifier
         Task { @MainActor [weak self] in
             self?.trackedNodes.removeValue(forKey: id)
+            self?.snapshotByAnchor.removeValue(forKey: id)
             self?.anchorCount = self?.trackedNodes.count ?? 0
         }
     }
@@ -178,23 +189,43 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         from anchor: ARMeshAnchor,
         isNew: Bool
     ) {
-        // If we have no snapshot yet (first second of capture), fall back
-        // to a flat-colored translucent material so SOMETHING appears.
-        let material: SCNMaterial
-        let useTexture = (latestSnapshot != nil) || trackedNodes[anchor.identifier] != nil
-        if let snap = latestSnapshot,
+        // Pick the snapshot that gets baked into THIS anchor's texture.
+        //   - If we already textured it once (didUpdate fired), reuse the
+        //     frozen first-sighting snapshot — preserves the "real RGB at
+        //     time of first observation" guarantee Option C requires.
+        //   - Otherwise capture the current `latestSnapshot` and freeze it.
+        let snap: CameraSnapshot?
+        if let frozen = snapshotByAnchor[anchor.identifier] {
+            snap = frozen
+        } else if let latest = latestSnapshot {
+            snapshotByAnchor[anchor.identifier] = latest
+            snap = latest
+        } else {
+            snap = nil
+        }
+
+        if let snap = snap,
            let geom = makeTexturedGeometry(from: anchor, snapshot: snap) {
-            material = makeTexturedMaterial(image: snap.image)
+            // The geometry rebuild picks up any new vertices/faces ARKit
+            // added on this didUpdate. UVs are computed from the FROZEN
+            // snapshot's camera matrices, so newly-added vertices fall
+            // into the correct location in the original texture (or
+            // outside it, which clamps to the texture's edge — visually
+            // a "pending" sliver of mesh, fixed when the user looks at
+            // it again and ARKit emits a new anchor for that area).
+            let material = makeTexturedMaterial(image: snap.image)
             geom.materials = [material]
             node.geometry = geom
         } else {
-            // Fall back to flat color
+            // No snapshot available yet (first second of capture, before
+            // the willRenderScene pump has fired). Show a translucent
+            // teal fallback so the user sees SOMETHING; the next didUpdate
+            // will retro-fit the real texture.
             let geom = makeFlatGeometry(from: anchor)
-            material = makeFlatMaterial()
-            geom.materials = [material]
+            geom.materials = [makeFlatMaterial()]
             node.geometry = geom
         }
-        _ = useTexture   // silence unused-let on the first branch above
+
         node.opacity = isEnabled ? 1.0 : 0.0
         if isNew || trackedNodes[anchor.identifier] == nil {
             trackedNodes[anchor.identifier] = node

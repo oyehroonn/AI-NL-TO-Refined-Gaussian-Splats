@@ -17,9 +17,15 @@ struct CaptureView: View {
 
     @EnvironmentObject var router: Router
     @StateObject private var coordinator = ARCaptureCoordinator()
-    /// AR-Layer 2.5 — live mesh overlay renderer. Enabled by default;
-    /// the user can hide it via the HUD button if it gets distracting.
-    @StateObject private var meshRenderer = MeshLiveRenderer()
+    /// AR-Layer 2.5 — live mesh overlay. The Gold tier (default, free)
+    /// uses TexturedMeshRenderer which projects the camera feed onto
+    /// each anchor for the "filling-in with real-world appearance"
+    /// effect. Other tiers (Platinum/Max/On-Mobile) reuse this same
+    /// renderer for their capture phase — they differ only in *post*-
+    /// capture playback. The legacy flat-color MeshLiveRenderer is kept
+    /// in the codebase as a non-Gold fallback for future tiers that
+    /// want to suppress textured sampling.
+    @StateObject private var texturedMesh = TexturedMeshRenderer()
 
     @State private var error: String?
     @State private var configured = false
@@ -83,7 +89,7 @@ struct CaptureView: View {
 
     private var preview: some View {
         ARSCNViewContainer(session: coordinator.arSession,
-                           delegate: meshRenderer)
+                           delegate: texturedMesh)
             .ignoresSafeArea()
     }
 
@@ -127,7 +133,7 @@ struct CaptureView: View {
             HStack(spacing: 8) {
                 MonoPill(label: "REC", value: timeString(elapsed))
                 Spacer()
-                MonoPill(label: "MESH", value: "\(meshRenderer.anchorCount)")
+                MonoPill(label: "MESH", value: "\(texturedMesh.anchorCount)")
                 meshToggleButton
                 MonoPill(label: "FRAMES",
                          value: "\(coordinator.capturedCount)/\(policy.frame_budget.target)")
@@ -157,28 +163,28 @@ struct CaptureView: View {
     /// Filled with halo when on, hairline ring when off.
     private var meshToggleButton: some View {
         Button {
-            meshRenderer.isEnabled.toggle()
+            texturedMesh.isEnabled.toggle()
         } label: {
-            Image(systemName: meshRenderer.isEnabled
+            Image(systemName: texturedMesh.isEnabled
                     ? "square.grid.3x3.fill" : "square.grid.3x3")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(meshRenderer.isEnabled
+                .foregroundStyle(texturedMesh.isEnabled
                                  ? Theme.Color.ink : Theme.Color.textPrimary)
                 .frame(width: 28, height: 28)
                 .background(
                     Circle().fill(
-                        meshRenderer.isEnabled
+                        texturedMesh.isEnabled
                             ? Theme.Color.halo.opacity(0.85)
                             : Color.white.opacity(0.05)
                     )
                 )
                 .overlay(
                     Circle().stroke(Theme.Color.halo.opacity(0.5),
-                                    lineWidth: meshRenderer.isEnabled ? 0 : 0.8)
+                                    lineWidth: texturedMesh.isEnabled ? 0 : 0.8)
                 )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(meshRenderer.isEnabled
+        .accessibilityLabel(texturedMesh.isEnabled
                             ? "Hide mesh overlay" : "Show mesh overlay")
     }
 
@@ -226,7 +232,8 @@ struct CaptureView: View {
         guard !configured else { return }
         // Drop any stale meshes from a previous (cancelled) session so the
         // overlay starts empty for this run.
-        meshRenderer.reset()
+        texturedMesh.reset()
+        texturedMesh.attach(session: coordinator.arSession)
         do {
             try await coordinator.start(
                 sessionID: descriptor.session_id,
