@@ -34,6 +34,12 @@ struct CaptureView: View {
     @State private var ticker: Timer?
     @State private var sectorFractions: [Double] = Array(repeating: 0, count: 8)
 
+    /// Snapshots fed into the post-scan explorer when the user taps the
+    /// Explore button. Populated lazily — we only snapshot when they ask,
+    /// so the live capture path stays cheap.
+    @State private var explorerSnapshots: [TexturedMeshRenderer.ExplorerSnapshot] = []
+    @State private var showingExplorer: Bool = false
+
     var body: some View {
         ZStack {
             preview
@@ -82,6 +88,9 @@ struct CaptureView: View {
         .onDisappear {
             stopTicker()
             coordinator.stop()
+        }
+        .fullScreenCover(isPresented: $showingExplorer) {
+            MeshExplorerView(snapshots: explorerSnapshots)
         }
     }
 
@@ -189,8 +198,14 @@ struct CaptureView: View {
     }
 
     private var bottomDock: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 12) {
             progressBlock
+            // Gold-tier "Explore Mesh" button. Visible after at least a
+            // handful of anchors have been textured so it's actually
+            // meaningful to walk into. Capture continues underneath.
+            if texturedMesh.anchorCount >= 3 {
+                exploreButton
+            }
             HStack(spacing: 12) {
                 GhostButton(title: "Cancel") {
                     coordinator.stop()
@@ -203,6 +218,36 @@ struct CaptureView: View {
         }
         .padding(.horizontal, 18)
         .padding(.bottom, 38)
+    }
+
+    private var exploreButton: some View {
+        Button {
+            // Snapshot the textured mesh state RIGHT NOW so the explorer
+            // gets the latest geometry. The capture session keeps running
+            // in the background so anchors emitted while exploring will
+            // appear in the next snapshot if the user re-opens it.
+            explorerSnapshots = texturedMesh.snapshotForExplorer()
+            showingExplorer = true
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "figure.walk.motion")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("EXPLORE MESH")
+                    .font(.system(size: 12, weight: .heavy)).tracking(1.6)
+                MonoPill(label: "GOLD", value: "")
+            }
+            .foregroundStyle(Color.black)
+            .padding(.horizontal, 18).padding(.vertical, 12)
+            .frame(maxWidth: .infinity)
+            .background(
+                Capsule().fill(LinearGradient(
+                    colors: [.white, Theme.Color.halo],
+                    startPoint: .topLeading, endPoint: .bottomTrailing))
+            )
+            .overlay(Capsule().stroke(Theme.Color.halo, lineWidth: 1.0))
+            .shadow(color: Theme.Color.halo.opacity(0.45), radius: 16)
+        }
+        .buttonStyle(.plain)
     }
 
     private var progressBlock: some View {
