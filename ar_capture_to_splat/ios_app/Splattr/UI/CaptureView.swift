@@ -17,6 +17,9 @@ struct CaptureView: View {
 
     @EnvironmentObject var router: Router
     @StateObject private var coordinator = ARCaptureCoordinator()
+    /// AR-Layer 2.5 — live mesh overlay renderer. Enabled by default;
+    /// the user can hide it via the HUD button if it gets distracting.
+    @StateObject private var meshRenderer = MeshLiveRenderer()
 
     @State private var error: String?
     @State private var configured = false
@@ -79,7 +82,8 @@ struct CaptureView: View {
     // MARK: pieces
 
     private var preview: some View {
-        ARSCNViewContainer(session: coordinator.arSession)
+        ARSCNViewContainer(session: coordinator.arSession,
+                           delegate: meshRenderer)
             .ignoresSafeArea()
     }
 
@@ -120,9 +124,11 @@ struct CaptureView: View {
 
     private var topBar: some View {
         VStack(spacing: 8) {
-            HStack {
+            HStack(spacing: 8) {
                 MonoPill(label: "REC", value: timeString(elapsed))
                 Spacer()
+                MonoPill(label: "MESH", value: "\(meshRenderer.anchorCount)")
+                meshToggleButton
                 MonoPill(label: "FRAMES",
                          value: "\(coordinator.capturedCount)/\(policy.frame_budget.target)")
             }
@@ -145,6 +151,35 @@ struct CaptureView: View {
         }
         .padding(.horizontal, 18)
         .padding(.top, 60)
+    }
+
+    /// Tiny round button that toggles the AR-Layer 2.5 mesh overlay.
+    /// Filled with halo when on, hairline ring when off.
+    private var meshToggleButton: some View {
+        Button {
+            meshRenderer.isEnabled.toggle()
+        } label: {
+            Image(systemName: meshRenderer.isEnabled
+                    ? "square.grid.3x3.fill" : "square.grid.3x3")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(meshRenderer.isEnabled
+                                 ? Theme.Color.ink : Theme.Color.textPrimary)
+                .frame(width: 28, height: 28)
+                .background(
+                    Circle().fill(
+                        meshRenderer.isEnabled
+                            ? Theme.Color.halo.opacity(0.85)
+                            : Color.white.opacity(0.05)
+                    )
+                )
+                .overlay(
+                    Circle().stroke(Theme.Color.halo.opacity(0.5),
+                                    lineWidth: meshRenderer.isEnabled ? 0 : 0.8)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(meshRenderer.isEnabled
+                            ? "Hide mesh overlay" : "Show mesh overlay")
     }
 
     private var bottomDock: some View {
@@ -189,6 +224,9 @@ struct CaptureView: View {
     @MainActor
     private func start() async {
         guard !configured else { return }
+        // Drop any stale meshes from a previous (cancelled) session so the
+        // overlay starts empty for this run.
+        meshRenderer.reset()
         do {
             try await coordinator.start(
                 sessionID: descriptor.session_id,
