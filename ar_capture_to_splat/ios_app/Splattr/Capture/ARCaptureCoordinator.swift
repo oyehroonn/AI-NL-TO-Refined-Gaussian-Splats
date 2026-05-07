@@ -170,6 +170,44 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
         arSession.pause()
     }
 
+    /// Pause the AR session while the post-scan Mesh Explorer is open.
+    /// We keep all captured state (frames, coverage, anchors) intact so
+    /// the user can dismiss the explorer and continue scanning.
+    /// `isRunning` is left set so handle(frame:) won't fire for any
+    /// stragglers, but the session itself is genuinely paused — no
+    /// camera, no compute.
+    private var pausedForExploration: Bool = false
+    private var savedConfigurationForExploration: ARWorldTrackingConfiguration?
+
+    func pauseForExploration() {
+        guard isRunning, !pausedForExploration else { return }
+        // Keep the same configuration around so we can resume with it.
+        if let policy = policy, let cap = capability {
+            savedConfigurationForExploration = makeConfiguration(
+                policy: policy,
+                capability: cap,
+                cadence: cadence
+            )
+        }
+        arSession.pause()
+        pausedForExploration = true
+    }
+
+    /// Resume the AR session after the Mesh Explorer is dismissed. We
+    /// re-run the saved configuration WITHOUT `.resetTracking` so the
+    /// world map and anchors are preserved across the pause.
+    func resumeFromExploration() {
+        guard pausedForExploration else { return }
+        pausedForExploration = false
+        if let cfg = savedConfigurationForExploration {
+            arSession.run(cfg, options: [])
+        } else if let policy = policy, let cap = capability {
+            // Defensive fallback: rebuild a config if we lost the saved one.
+            let cfg = makeConfiguration(policy: policy, capability: cap, cadence: cadence)
+            arSession.run(cfg, options: [])
+        }
+    }
+
     /// Called by CaptureView when the user taps "Stop & Upload" or when stop
     /// conditions fire automatically. Exports the worldMap, snapshots the
     /// sceneReconstruction mesh, writes the rejected-frames JSON, then

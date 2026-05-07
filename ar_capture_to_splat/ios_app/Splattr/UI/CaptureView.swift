@@ -89,8 +89,21 @@ struct CaptureView: View {
             stopTicker()
             coordinator.stop()
         }
-        .fullScreenCover(isPresented: $showingExplorer) {
-            MeshExplorerView(snapshots: explorerSnapshots)
+        .fullScreenCover(isPresented: $showingExplorer, onDismiss: {
+            // Resume AR scanning where we left off. The world map +
+            // anchors are preserved by ARCaptureCoordinator across the
+            // pause so the user can keep extending the mesh.
+            coordinator.resumeFromExploration()
+        }) {
+            MeshExplorerView(
+                snapshots: explorerSnapshots,
+                onAppear: {
+                    // Pausing avoids a buffer-mutation race against the
+                    // explorer's deep-copied geometry, plus saves battery
+                    // and frees the GPU for the explorer itself.
+                    coordinator.pauseForExploration()
+                }
+            )
         }
     }
 

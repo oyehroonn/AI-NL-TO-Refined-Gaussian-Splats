@@ -171,6 +171,11 @@ private struct ExplorerSceneKitView: UIViewRepresentable {
         // Scene is built once and lives for the explorer's lifetime.
     }
 
+    private struct BuiltScene {
+        let scene: SCNScene
+        let bounds: SceneBoundsDescriptor
+    }
+
     /// Build a fresh SCNScene from the captured mesh snapshots and return
     /// the scene plus its world-space AABB. Each anchor becomes a node with:
     ///   - A rebuilt SCNGeometry whose buffers are the snapshot's owned Data.
@@ -178,7 +183,7 @@ private struct ExplorerSceneKitView: UIViewRepresentable {
     ///     the photo of the room (not the AR-overlay translucent material).
     ///   - A static SCNPhysicsBody with concavePolyhedron collision so the
     ///     player's capsule walks on the floor and bounces off walls.
-    private func buildScene() -> (SCNScene, SceneBounds) {
+    private func buildScene() -> BuiltScene {
         let scene = SCNScene()
         scene.physicsWorld.gravity = SCNVector3(0, -9.81, 0)
 
@@ -234,7 +239,10 @@ private struct ExplorerSceneKitView: UIViewRepresentable {
             wmin = SIMD3(-2, -1, -2)
             wmax = SIMD3( 2,  2,  2)
         }
-        return (scene, SceneBounds(min: wmin, max: wmax))
+        return BuiltScene(
+            scene: scene,
+            bounds: SceneBoundsDescriptor(minBound: wmin, maxBound: wmax)
+        )
     }
 
     /// Build a SCNGeometry from owned Data blobs — no shared MTLBuffer.
@@ -299,12 +307,6 @@ private struct ExplorerSceneKitView: UIViewRepresentable {
         m.readsFromDepthBuffer = true
         return m
     }
-}
-
-private struct SceneBounds {
-    let min: SIMD3<Float>
-    let max: SIMD3<Float>
-    var center: SIMD3<Float> { (min + max) * 0.5 }
 }
 
 // ── First-person controller ──────────────────────────────────────────────────
@@ -461,24 +463,11 @@ final class FirstPersonController: ObservableObject {
     }
 }
 
-/// Adapter exposed to FirstPersonController so it doesn't need to know
-/// the private SceneBounds type.
+/// World-space AABB of the captured mesh snapshots. Drives where we spawn
+/// the player so they never start inside a wall or below the floor.
 struct SceneBoundsDescriptor {
     let minBound: SIMD3<Float>
     let maxBound: SIMD3<Float>
-}
-
-private extension FirstPersonController {
-    func attach(scene: SCNScene, sceneView: SCNView, sceneBounds: SceneBounds) {
-        attach(
-            scene: scene,
-            sceneView: sceneView,
-            sceneBounds: SceneBoundsDescriptor(
-                minBound: sceneBounds.min,
-                maxBound: sceneBounds.max
-            )
-        )
-    }
 }
 
 // ── Virtual joystick ─────────────────────────────────────────────────────────
