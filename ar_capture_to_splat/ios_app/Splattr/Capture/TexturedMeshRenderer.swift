@@ -87,51 +87,44 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
     }
 
     /// Snapshot of every currently-textured anchor for hand-off to the
-    /// MeshExplorerView. Performs a deep byte-copy of every Metal buffer so
-    /// the resulting array is fully independent of ARKit's live state.
+    /// MeshExplorerView. Reads each anchor's raw Metal buffers and copies
+    /// every byte into freshly-allocated `Data` so the resulting array is
+    /// fully independent of ARKit's live state.
     func snapshotForExplorer() -> [ExplorerSnapshot] {
         var out: [ExplorerSnapshot] = []
         out.reserveCapacity(trackedNodes.count)
-        for (id, node) in trackedNodes {
+        for (id, anchor) in anchorsByID {
             guard let snap = snapshotByAnchor[id] else { continue }
-            // We need the original ARMeshAnchor to read its raw geometry
-            // buffers + transform. We don't keep a strong reference to the
-            // anchor, so re-derive everything we need from the SCN node + the
-            // frozen camera snapshot we already store.
-            //
-            // The node's geometry was rebuilt via makeTexturedGeometry which
-            // shares ARKit's buffers. Reading bytes from those sources here
-            // gets us the most-recent snapshot ARKit has emitted; we copy
-            // every byte before returning so further ARKit writes won't
-            // affect the explorer.
-            guard let owned = ownGeometry(node: node, snapshot: snap) else { continue }
+            guard let owned = ownGeometryFromAnchor(anchor: anchor, snapshot: snap) else { continue }
             out.append(owned)
         }
         return out
     }
 
-    /// Read every geometry source/element on the live SCN node, copy bytes
-    /// into freshly-allocated `Data`, and bundle the texture UIImage.
-    private func ownGeometry(
-        node: SCNNode,
+    /// Read the ARMeshAnchor's raw geometry buffers directly, copy bytes
+    /// into freshly-allocated `Data`, recompute UVs from the frozen camera
+    /// matrices, and bundle the texture UIImage. The resulting snapshot
+    /// shares no Metal buffer with ARKit.
+    private func ownGeometryFromAnchor(
+        anchor: ARMeshAnchor,
         snapshot: CameraSnapshot
     ) -> ExplorerSnapshot? {
-        guard let geom = node.geometry else { return nil }
-
-        // ── Vertices ─────────────────────────────────────────────────────
-        guard let vSrc = geom.sources(for: .vertex).first else { return nil }
-        let vertexCount = vSrc.vectorCount
+        let g = anchor.geometry
+        let vertexCount = g.vertices.count
         guard vertexCount > 0 else { return nil }
-        // Re-pack into tight SIMD3<Float> layout (12 bytes/vertex). ARKit
-        // hands us 16-byte stride; SceneKit accepts either, but tight
-        // packing keeps physics-shape construction predictable.
+        let xform = anchor.transform
+
+        // ── Vertices: read from MTLBuffer.contents() and tight-pack ─────
         var verts = [SIMD3<Float>](repeating: .zero, count: vertexCount)
-        readPackedFloat3(from: vSrc, into: &verts)
+        let vBase = g.vertices.buffer.contents().advanced(by: g.vertices.offset)
+        for i in 0..<vertexCount {
+            let p = vBase.advanced(by: i * g.vertices.stride)
+                .assumingMemoryBound(to: SIMD3<Float>.self).pointee
+            verts[i] = p
+        }
         let vertexData = verts.withUnsafeBufferPointer { Data(buffer: $0) }
 
-        // World-space AABB (used by the explorer to spawn the player and
-        // size the physics world).
-        let xform = node.simdWorldTransform
+        // World-space AABB (used by the explorer to spawn the player).
         var wmin = SIMD3<Float>( .infinity,  .infinity,  .infinity)
         var wmax = SIMD3<Float>(-.infinity, -.infinity, -.infinity)
         for v in verts {
@@ -144,18 +137,19 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         // ── Normals (optional) ──────────────────────────────────────────
         var normalData = Data()
         var normalCount = 0
-        if let nSrc = geom.sources(for: .normal).first, nSrc.vectorCount == vertexCount {
+        if g.normals.count == vertexCount {
             var normals = [SIMD3<Float>](repeating: .zero, count: vertexCount)
-            readPackedFloat3(from: nSrc, into: &normals)
+            let nBase = g.normals.buffer.contents().advanced(by: g.normals.offset)
+            for i in 0..<vertexCount {
+                let p = nBase.advanced(by: i * g.normals.stride)
+                    .assumingMemoryBound(to: SIMD3<Float>.self).pointee
+                normals[i] = p
+            }
             normalData = normals.withUnsafeBufferPointer { Data(buffer: $0) }
             normalCount = vertexCount
         }
 
-        // ── UVs ──────────────────────────────────────────────────────────
-        // Re-derive UVs from the frozen snapshot's camera matrices — this
-        // avoids reading the live UV source whose underlying buffer we
-        // synthesised but is also fine to recompute (cheap; vertexCount
-        // points × one mat-vec each).
+        // ── UVs from the frozen snapshot ────────────────────────────────
         let viewProj = simd_mul(snapshot.projectionMatrix, snapshot.viewMatrix)
         var uvs = [SIMD2<Float>](repeating: SIMD2(0.5, 0.5), count: vertexCount)
         for i in 0..<vertexCount {
@@ -171,16 +165,13 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         }
         let uvData = uvs.withUnsafeBufferPointer { Data(buffer: $0) }
 
-        // ── Triangle indices ────────────────────────────────────────────
-        guard let elem = geom.elements.first,
-              elem.primitiveType == .triangles,
-              elem.primitiveCount > 0 else { return nil }
-        // SCNGeometryElement gives us .data — already a Data object backed
-        // by either the original buffer or its own copy. Copying via Data
-        // initialiser is cheap and detaches us from the source.
-        let indexData = Data(elem.data)
-        let triangleCount = elem.primitiveCount
-        let bytesPerIndex = elem.bytesPerIndex
+        // ── Triangle indices: copy directly from the MTLBuffer ──────────
+        let triangleCount = g.faces.count
+        guard triangleCount > 0 else { return nil }
+        let bytesPerIndex = g.faces.bytesPerIndex
+        let totalIndexBytes = triangleCount * 3 * bytesPerIndex
+        let iBase = g.faces.buffer.contents()
+        let indexData = Data(bytes: iBase, count: totalIndexBytes)
 
         return ExplorerSnapshot(
             worldTransform: xform,
@@ -196,27 +187,6 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
             worldMax: wmax,
             textureImage: snapshot.image
         )
-    }
-
-    /// Helper: read a SCNGeometrySource of float3-shaped data into a
-    /// tightly-packed SIMD3<Float> array, regardless of the source's stride
-    /// (ARKit tends to use 16-byte stride for alignment).
-    private func readPackedFloat3(
-        from src: SCNGeometrySource,
-        into out: inout [SIMD3<Float>]
-    ) {
-        let count = src.vectorCount
-        guard count > 0, count == out.count else { return }
-        let stride = src.dataStride
-        let offset = src.dataOffset
-        src.data.withUnsafeBytes { raw in
-            guard let base = raw.baseAddress else { return }
-            for i in 0..<count {
-                let p = base.advanced(by: offset + i * stride)
-                    .assumingMemoryBound(to: SIMD3<Float>.self)
-                out[i] = p.pointee
-            }
-        }
     }
 
     // MARK: - Internal state
@@ -301,6 +271,7 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         let id = anchor.identifier
         Task { @MainActor [weak self] in
             self?.trackedNodes.removeValue(forKey: id)
+            self?.anchorsByID.removeValue(forKey: id)
             self?.snapshotByAnchor.removeValue(forKey: id)
             self?.anchorCount = self?.trackedNodes.count ?? 0
         }
@@ -400,6 +371,10 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
             trackedNodes[anchor.identifier] = node
             anchorCount = trackedNodes.count
         }
+        // Always refresh the anchor pointer; ARKit hands us the same anchor
+        // object across didAdd/didUpdate, but we want our reference to track
+        // the latest geometry generation regardless.
+        anchorsByID[anchor.identifier] = anchor
     }
 
     /// Build SCNGeometry with vertex positions, normals, and **per-vertex
