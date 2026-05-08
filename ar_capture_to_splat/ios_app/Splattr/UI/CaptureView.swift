@@ -95,15 +95,10 @@ struct CaptureView: View {
             // pause so the user can keep extending the mesh.
             coordinator.resumeFromExploration()
         }) {
-            MeshExplorerView(
-                snapshots: explorerSnapshots,
-                onAppear: {
-                    // Pausing avoids a buffer-mutation race against the
-                    // explorer's deep-copied geometry, plus saves battery
-                    // and frees the GPU for the explorer itself.
-                    coordinator.pauseForExploration()
-                }
-            )
+            // pauseForExploration() already fired in the explore-button
+            // tap handler — see the comment there. The cover content
+            // appears with the AR session already paused.
+            MeshExplorerView(snapshots: explorerSnapshots)
         }
     }
 
@@ -235,10 +230,16 @@ struct CaptureView: View {
 
     private var exploreButton: some View {
         Button {
-            // Snapshot the textured mesh state RIGHT NOW so the explorer
-            // gets the latest geometry. The capture session keeps running
-            // in the background so anchors emitted while exploring will
-            // appear in the next snapshot if the user re-opens it.
+            // ORDER MATTERS for the first-launch black-screen fix:
+            //  1. Pause the AR session FIRST. If we delayed this until the
+            //     cover's onAppear, the underlying ARSCNView would still be
+            //     rendering through the first ~hundreds of ms of cover
+            //     presentation — both views share the Metal command queue,
+            //     and the contention drops the explorer's first frames.
+            //  2. THEN take the snapshot. Buffers are still owned by us,
+            //     and ARKit is no longer mutating them.
+            //  3. THEN flip the cover.
+            coordinator.pauseForExploration()
             explorerSnapshots = texturedMesh.snapshotForExplorer()
             showingExplorer = true
         } label: {

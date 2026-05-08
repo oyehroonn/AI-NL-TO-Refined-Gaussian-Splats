@@ -31,10 +31,6 @@ import simd
 struct MeshExplorerView: View {
 
     let snapshots: [TexturedMeshRenderer.ExplorerSnapshot]
-    /// Optional callbacks fired right after the cover is presented and right
-    /// before it dismisses. CaptureView uses these to pause/resume ARKit.
-    var onAppear: (() -> Void)? = nil
-    var onDisappear: (() -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var controller = FirstPersonController()
@@ -53,11 +49,7 @@ struct MeshExplorerView: View {
         }
         .preferredColorScheme(.dark)
         .background(Color.black)
-        .onAppear { onAppear?() }
-        .onDisappear {
-            controller.stopMovementLoop()
-            onDisappear?()
-        }
+        .onDisappear { controller.stopMovementLoop() }
     }
 
     private var controlsOverlay: some View {
@@ -367,15 +359,25 @@ final class FirstPersonController: ObservableObject {
     func attach(scene: SCNScene, sceneView: SCNView, sceneBounds: SceneBoundsDescriptor) {
         self.sceneView = sceneView
         scene.rootNode.addChildNode(playerNode)
-        sceneView.pointOfView = cameraNode
 
-        // Spawn at the AABB center (XZ) and 1.6 m above the lowest geometry.
-        // 1.6 m is adult eye height — gravity then settles us onto the floor.
+        // ORDER MATTERS for the first-launch black-screen fix.
+        // Set the player's spawn position BEFORE assigning pointOfView so
+        // the very first display-link frame uses the correct camera pose.
+        // Otherwise SCNView renders frame zero with the player still at
+        // origin (often outside the captured AABB → camera pointing at
+        // empty space → black).
         let center = (sceneBounds.minBound + sceneBounds.maxBound) * 0.5
         let spawn = SIMD3<Float>(center.x, sceneBounds.minBound.y + 1.6, center.z)
         playerNode.simdPosition = spawn
-        // Reset velocity so spawn doesn't inherit any junk transient.
         playerNode.physicsBody?.velocity = SCNVector3(0, 0, 0)
+
+        sceneView.pointOfView = cameraNode
+
+        // Warm up the renderer so the first display-link frame already has
+        // textures + geometry uploaded to the GPU. Without this, the very
+        // first present can come back blank for one or two frames while
+        // SceneKit lazily uploads.
+        sceneView.prepare([scene]) { _ in }
 
         startMovementLoop()
     }
