@@ -324,6 +324,115 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         guard let frame = arSession?.currentFrame else { return }
         guard let snap = makeSnapshot(from: frame) else { return }
         latestSnapshot = snap
+
+        // P1.5 — every fresh snapshot is a candidate for EVERY tracked
+        // anchor, not just the one ARKit happens to refine next. Score it
+        // against each anchor's cached centroid and let the per-anchor
+        // ring buffer decide whether to keep it. ~50 anchors × O(1) work
+        // each at 10 Hz = ~500 cheap evaluations/sec — negligible.
+        for (id, _) in anchorCentroidByID {
+            consider(snapshot: snap, forAnchorID: id)
+        }
+    }
+
+    // MARK: - Scoring
+
+    /// Compute world-space centroid of an anchor by averaging its vertex
+    /// positions. ARKit hands us anchor-local coordinates, so we transform
+    /// the mean by anchor.transform to land in world space.
+    private func computeCentroid(for anchor: ARMeshAnchor) -> SIMD3<Float> {
+        let g = anchor.geometry
+        let n = g.vertices.count
+        guard n > 0 else {
+            // Fall back to the anchor's translation (origin in local space).
+            let t = anchor.transform
+            return SIMD3<Float>(t.columns.3.x, t.columns.3.y, t.columns.3.z)
+        }
+        let base = g.vertices.buffer.contents().advanced(by: g.vertices.offset)
+        var sum = SIMD3<Float>(0, 0, 0)
+        // Sample stride: for big anchors we don't need to read every vertex.
+        // Cap at 256 samples — plenty for a stable centroid.
+        let step = max(1, n / 256)
+        var count = 0
+        var i = 0
+        while i < n {
+            let p = base.advanced(by: i * g.vertices.stride)
+                .assumingMemoryBound(to: SIMD3<Float>.self).pointee
+            sum += p
+            count += 1
+            i += step
+        }
+        let local = sum / Float(count)
+        let world4 = simd_mul(anchor.transform,
+                              SIMD4<Float>(local.x, local.y, local.z, 1))
+        return SIMD3<Float>(world4.x, world4.y, world4.z)
+    }
+
+    /// Score a snapshot's suitability as the texture for an anchor.
+    ///
+    /// The product of three factors, each in [0, 1]:
+    ///  - **view-angle**: cosine of the angle between camera forward and
+    ///    direction-to-anchor. 1.0 = camera pointed straight at anchor,
+    ///    0.0 = perpendicular or behind. We clamp to 0 below; a camera
+    ///    facing AWAY from the anchor must never win the slot.
+    ///  - **distance**: 1.0 at <0.5 m, falling off as 1/d. Closer photos
+    ///    have higher pixel density per face → sharper texture.
+    ///  - **sharpness**: BlurDetector value normalised to [0, 1]. A motion-
+    ///    blurred frame can never beat a sharp one.
+    ///
+    /// All three must be reasonable; one weak factor zeros the score.
+    private func score(
+        snapshot snap: CameraSnapshot,
+        anchorCentroid centroid: SIMD3<Float>
+    ) -> Float {
+        let toAnchor = centroid - snap.cameraPosition
+        let dist = simd_length(toAnchor)
+        if dist < 1e-3 { return 0 }
+        let dir = toAnchor / dist
+        let dot = simd_dot(snap.cameraForward, dir)
+        let viewScore: Float = max(0, dot)              // [0, 1]
+        let distScore: Float = min(1, 2.0 / max(dist, 0.5))  // 1 at <0.5m
+        let sharpScore: Float = min(1, max(0, snap.sharpness))
+        return viewScore * distScore * sharpScore
+    }
+
+    /// Consider a snapshot as a candidate for an anchor: score it, insert
+    /// into the ring buffer if it beats the worst slot or if there's room.
+    private func consider(snapshot snap: CameraSnapshot, forAnchorID id: UUID) {
+        guard let centroid = anchorCentroidByID[id] else { return }
+        let s = score(snapshot: snap, anchorCentroid: centroid)
+        // A score of 0 means the camera was looking AWAY from this anchor.
+        // Don't pollute the ring buffer with these.
+        if s <= 0.001 { return }
+
+        var buf = snapshotsByAnchor[id] ?? []
+        if buf.count < maxSnapshotsPerAnchor {
+            buf.append(ScoredSnapshot(snapshot: snap, score: s))
+        } else {
+            // Find the worst slot; replace if the new score wins.
+            var worstIdx = 0
+            var worstScore: Float = buf[0].score
+            for k in 1..<buf.count {
+                if buf[k].score < worstScore {
+                    worstScore = buf[k].score
+                    worstIdx = k
+                }
+            }
+            if s > worstScore {
+                buf[worstIdx] = ScoredSnapshot(snapshot: snap, score: s)
+            }
+        }
+        snapshotsByAnchor[id] = buf
+    }
+
+    /// Pick the best (highest-scoring) snapshot from the ring buffer.
+    private func bestSnapshot(forAnchorID id: UUID) -> CameraSnapshot? {
+        guard let buf = snapshotsByAnchor[id], !buf.isEmpty else { return nil }
+        var best = buf[0]
+        for k in 1..<buf.count where buf[k].score > best.score {
+            best = buf[k]
+        }
+        return best.snapshot
     }
 
     private func makeSnapshot(from frame: ARFrame) -> CameraSnapshot? {
@@ -395,52 +504,57 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         from anchor: ARMeshAnchor,
         isNew: Bool
     ) {
-        // Pick the snapshot that gets baked into THIS anchor's texture.
-        //   - If we already textured it once (didUpdate fired), reuse the
-        //     frozen first-sighting snapshot — preserves the "real RGB at
-        //     time of first observation" guarantee Option C requires.
-        //   - Otherwise capture the current `latestSnapshot` and freeze it.
-        let snap: CameraSnapshot?
-        if let frozen = snapshotByAnchor[anchor.identifier] {
-            snap = frozen
-        } else if let latest = latestSnapshot {
-            snapshotByAnchor[anchor.identifier] = latest
-            snap = latest
-        } else {
-            snap = nil
+        let id = anchor.identifier
+
+        // Refresh the centroid cache. Mesh anchors refine over time so the
+        // centroid drifts; recomputing it here keeps the score function
+        // honest, and rescoring stale ring-buffer entries against the new
+        // centroid keeps "best-view" pointing at the latest geometry.
+        let centroid = computeCentroid(for: anchor)
+        anchorCentroidByID[id] = centroid
+
+        // Re-score every ring-buffer entry against the (possibly-shifted)
+        // centroid. Cheap — at most maxSnapshotsPerAnchor entries.
+        if var buf = snapshotsByAnchor[id] {
+            for k in 0..<buf.count {
+                buf[k].score = score(snapshot: buf[k].snapshot,
+                                     anchorCentroid: centroid)
+            }
+            snapshotsByAnchor[id] = buf
         }
 
-        if let snap = snap,
+        // Seed: if the buffer is empty and we have a latestSnapshot, give
+        // this anchor at least ONE candidate so it shows something on the
+        // very first didAdd (before the snapshot pump has had a chance to
+        // re-iterate over the new anchor).
+        if (snapshotsByAnchor[id]?.isEmpty ?? true), let latest = latestSnapshot {
+            consider(snapshot: latest, forAnchorID: id)
+        }
+
+        // Pick the highest-scoring candidate and bake it.
+        if let snap = bestSnapshot(forAnchorID: id),
            let geom = makeTexturedGeometry(from: anchor, snapshot: snap) {
-            // The geometry rebuild picks up any new vertices/faces ARKit
-            // added on this didUpdate. UVs are computed from the FROZEN
-            // snapshot's camera matrices, so newly-added vertices fall
-            // into the correct location in the original texture (or
-            // outside it, which clamps to the texture's edge — visually
-            // a "pending" sliver of mesh, fixed when the user looks at
-            // it again and ARKit emits a new anchor for that area).
             let material = makeTexturedMaterial(image: snap.image)
             geom.materials = [material]
             node.geometry = geom
         } else {
-            // No snapshot available yet (first second of capture, before
-            // the willRenderScene pump has fired). Show a translucent
-            // teal fallback so the user sees SOMETHING; the next didUpdate
-            // will retro-fit the real texture.
+            // No snapshot yet (first second of capture before the pump has
+            // fired). Show the translucent teal fallback so the user sees
+            // something; the next didUpdate will retro-fit a real texture.
             let geom = makeFlatGeometry(from: anchor)
             geom.materials = [makeFlatMaterial()]
             node.geometry = geom
         }
 
         node.opacity = isEnabled ? 1.0 : 0.0
-        if isNew || trackedNodes[anchor.identifier] == nil {
-            trackedNodes[anchor.identifier] = node
+        if isNew || trackedNodes[id] == nil {
+            trackedNodes[id] = node
             anchorCount = trackedNodes.count
         }
         // Always refresh the anchor pointer; ARKit hands us the same anchor
         // object across didAdd/didUpdate, but we want our reference to track
         // the latest geometry generation regardless.
-        anchorsByID[anchor.identifier] = anchor
+        anchorsByID[id] = anchor
     }
 
     /// Build SCNGeometry with vertex positions, normals, and **per-vertex
