@@ -53,6 +53,11 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
     private let loopDetector = LoopClosureDetector()
     private var frameLogger: FrameLogger?
 
+    /// P2 — pool of "candidate views" used by MeshAtlasBaker to texture
+    /// the mesh. Every accepted frame feeds this pool; on bake, we hand
+    /// the pool's texture array + per-frame metadata to the baker.
+    private(set) var candidateViewPool: CandidateViewPool? = CandidateViewPool()
+
     /// Concurrent encoding queue so JPEG/depth I/O doesn't block the
     /// ARSession delegate.
     private let encodeQueue = DispatchQueue(label: "splattr.capture.encode",
@@ -129,6 +134,8 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
             nearMeters: policy.distance_band_meters.near,
             farMeters: policy.distance_band_meters.far
         )
+        // Reset the candidate pool so prior-session frames don't leak in.
+        candidateViewPool?.reset()
         qualityGate = QualityGate(policy: policy)
         frameLogger = try FrameLogger(sessionID: sessionID)
         frames.removeAll()
@@ -330,6 +337,13 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
 
     /// Sidecar URL for rejected_frames.json.
     var rejectedFramesSidecarURL: URL? { frameLogger?.rejectedFramesURL }
+
+    /// P2 — handoff to MeshAtlasBaker. Take this snapshot AFTER calling
+    /// `pauseForExploration()` so the pool doesn't ingest new frames
+    /// while the bake is reading slices from the texture array.
+    func snapshotCandidateViews() -> CandidateViewSnapshot? {
+        return candidateViewPool?.snapshot()
+    }
 
     // MARK: - Permission
 
@@ -607,6 +621,11 @@ extension ARCaptureCoordinator {
 
         frames.append(captured)
         capturedCount = acceptedFrames.count
+
+        // P2 — every accepted frame is a candidate view for the atlas
+        // bake. The pool's diversity filter + sharpness eviction pick the
+        // ones worth keeping; this is a fire-and-forget call.
+        candidateViewPool?.consider(arFrame: sourceFrame, sharpness: blurScore)
     }
 
     /// Wrap `arSession.captureHighResolutionFrame` in async/await. Returns
