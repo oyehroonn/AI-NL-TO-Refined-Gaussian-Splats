@@ -91,11 +91,16 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
     /// MeshExplorerView. Reads each anchor's raw Metal buffers and copies
     /// every byte into freshly-allocated `Data` so the resulting array is
     /// fully independent of ARKit's live state.
+    ///
+    /// Uses the best-scoring snapshot from each anchor's ring buffer (the
+    /// camera view that was actually pointed at the anchor, sharply, from
+    /// a reasonable distance) — NOT the first-sighting snapshot, which is
+    /// what produced the long horizontal smears in the legacy renderer.
     func snapshotForExplorer() -> [ExplorerSnapshot] {
         var out: [ExplorerSnapshot] = []
         out.reserveCapacity(trackedNodes.count)
         for (id, anchor) in anchorsByID {
-            guard let snap = snapshotByAnchor[id] else { continue }
+            guard let snap = bestSnapshot(forAnchorID: id) else { continue }
             guard let owned = ownGeometryFromAnchor(anchor: anchor, snapshot: snap) else { continue }
             out.append(owned)
         }
@@ -150,19 +155,26 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
             normalCount = vertexCount
         }
 
-        // ── UVs from the frozen snapshot ────────────────────────────────
+        // ── UVs from the chosen best-view snapshot ─────────────────────
+        // Same sentinel rule as makeTexturedGeometry: vertices that don't
+        // project cleanly into the snapshot's [0.05, 0.95] inset get UV
+        // (-1, -1), and the explorer's fragment shader replaces them with
+        // neutral grey. Without this the texture's edge pixels would smear
+        // across walls in the explorer view.
         let viewProj = simd_mul(snapshot.projectionMatrix, snapshot.viewMatrix)
-        var uvs = [SIMD2<Float>](repeating: SIMD2(0.5, 0.5), count: vertexCount)
+        let sentinel = SIMD2<Float>(-1, -1)
+        var uvs = [SIMD2<Float>](repeating: sentinel, count: vertexCount)
         for i in 0..<vertexCount {
             let p = verts[i]
             let world = simd_mul(xform, SIMD4<Float>(p.x, p.y, p.z, 1))
             let clip = simd_mul(viewProj, world)
-            if clip.w == 0 { continue }
+            if clip.w <= 0 { continue }
             let ndcX = clip.x / clip.w
             let ndcY = clip.y / clip.w
-            let u = (ndcX * 0.5) + 0.5
-            let v = 1.0 - ((ndcY * 0.5) + 0.5)
-            uvs[i] = SIMD2(Float(u), Float(v))
+            let u: Float = Float((ndcX * 0.5) + 0.5)
+            let v: Float = Float(1.0 - ((ndcY * 0.5) + 0.5))
+            if u < 0.05 || u > 0.95 || v < 0.05 || v > 0.95 { continue }
+            uvs[i] = SIMD2(u, v)
         }
         let uvData = uvs.withUnsafeBufferPointer { Data(buffer: $0) }
 
@@ -290,10 +302,12 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
     ) {
         guard let mesh = anchor as? ARMeshAnchor else { return }
         Task { @MainActor [weak self] in
-            // ARKit refines the mesh as the user explores. We refresh
-            // geometry (vertex positions/faces change) but DO NOT re-bake
-            // the texture — keeping the original snapshot texture matches
-            // the room's appearance at first observation.
+            // ARKit refines the anchor as the user explores. We re-pick the
+            // best-scoring snapshot from the per-anchor ring buffer (the
+            // centroid may have drifted, so the previously-best photo
+            // could no longer be best). Re-baking the texture from the new
+            // best lets each anchor settle on the photo where the camera
+            // was actually pointed at it.
             self?.installTexturedMesh(into: node, from: mesh, isNew: false)
         }
     }
@@ -593,9 +607,16 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         }
 
         // UV source — computed per vertex by projecting through the snapshot.
+        // Vertices that project outside a [0.05, 0.95] inset of the texture
+        // are tagged with sentinel UV (-1, -1). The Phase 0 fragment shader
+        // modifier on the explorer material catches that range and replaces
+        // the fragment with neutral grey, so vertices that fell outside the
+        // photo's frustum (or behind the camera) read as "missing" instead
+        // of streaking the texture's edge pixels across the wall.
         let anchorXform = anchor.transform
         let viewProj = simd_mul(snapshot.projectionMatrix, snapshot.viewMatrix)
-        var uvs = [SIMD2<Float>](repeating: SIMD2(0.5, 0.5), count: vertCount)
+        let sentinel = SIMD2<Float>(-1, -1)
+        var uvs = [SIMD2<Float>](repeating: sentinel, count: vertCount)
         // Read the vertex buffer host-side. Apple's mesh anchors use shared
         // memory, so .contents() reads back without a Metal blit.
         let vBase = g.vertices.buffer.contents().advanced(by: g.vertices.offset)
@@ -604,16 +625,21 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
                 .assumingMemoryBound(to: SIMD3<Float>.self).pointee
             let world = simd_mul(anchorXform, SIMD4<Float>(vp.x, vp.y, vp.z, 1.0))
             let clip = simd_mul(viewProj, world)
-            if clip.w == 0 { continue }
+            // Behind-the-camera vertices (clip.w ≤ 0) are unrenderable from
+            // this snapshot — sentinel them.
+            if clip.w <= 0 { continue }
             // Perspective divide → NDC [-1, 1]
             let ndcX = clip.x / clip.w
             let ndcY = clip.y / clip.w
             // NDC → texture UV [0, 1]. ARKit's projectionMatrix uses GL-style
             // NDC where y points up; UIImage texture origin is top-left, so
             // flip y on the way in.
-            let u = (ndcX * 0.5) + 0.5
-            let v = 1.0 - ((ndcY * 0.5) + 0.5)
-            uvs[i] = SIMD2(Float(u), Float(v))
+            let u: Float = Float((ndcX * 0.5) + 0.5)
+            let v: Float = Float(1.0 - ((ndcY * 0.5) + 0.5))
+            // Tight inset: vertices in [0, 0.05) ∪ (0.95, 1] still read
+            // edge pixels, which smear visually. Sentinel them too.
+            if u < 0.05 || u > 0.95 || v < 0.05 || v > 0.95 { continue }
+            uvs[i] = SIMD2(u, v)
         }
 
         let uvData = uvs.withUnsafeBufferPointer { Data(buffer: $0) }
