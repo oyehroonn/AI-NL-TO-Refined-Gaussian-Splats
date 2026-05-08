@@ -170,34 +170,34 @@ private struct ExplorerSceneKitView: UIViewRepresentable {
     private struct BuiltScene { let scene: SCNScene }
 
     /// Build the SCNScene from the BakedMesh:
-    ///   - Render node: one SCNGeometry from the unwelded render mesh
-    ///     (3 verts per triangle, sequential indices) with the baked
-    ///     atlas as the diffuse material. No shader-modifier needed —
-    ///     the atlas already covers every triangle's tile, with grey
-    ///     waste pixels inside the tile margins (never sampled at
-    ///     runtime because the tile UVs land within the triangular
-    ///     region).
-    ///   - Physics node: one SCNGeometry from the welded mesh (shared
-    ///     vertices) used purely for the static concavePolyhedron
-    ///     collision shape. Hidden from rendering.
-    ///   - Soft ambient + tiny key directional. Atlas is `.constant`
-    ///     so lights only matter when SceneKit's pipeline blends ambient.
+    ///   - One render node PER BakedChunk. Each chunk owns its own
+    ///     SCNGeometry (3 verts/tri, atlas UVs) and material (the chunk's
+    ///     baked atlas as MTLTexture diffuse). N chunks = N draw calls,
+    ///     handled trivially by SceneKit. Multi-atlas exists so we can
+    ///     hold full per-face resolution (256 px per face) on rooms with
+    ///     more triangles than fit in one atlas.
+    ///   - One hidden physics node from the welded mesh (shared vertices,
+    ///     indexed triangles) — concavePolyhedron static body, full
+    ///     collision detail across the whole room regardless of how many
+    ///     atlases the rendering uses.
+    ///   - Soft ambient. Atlas is `.constant` so lights only matter for
+    ///     SceneKit's ambient blend.
     private func buildScene() -> BuiltScene {
         let scene = SCNScene()
         scene.physicsWorld.gravity = SCNVector3(0, -9.81, 0)
         scene.physicsWorld.timeStep = 1.0 / 90.0  // smoother walking
 
-        // ── Render geometry (atlas-textured) ───────────────────────────
-        if let renderGeom = makeRenderGeometry() {
-            renderGeom.materials = [makeAtlasMaterial(atlas: bakedMesh.atlas)]
-            let renderNode = SCNNode(geometry: renderGeom)
-            renderNode.castsShadow = false
-            scene.rootNode.addChildNode(renderNode)
+        // ── Render: one SCNNode per BakedChunk ──────────────────────────
+        for chunk in bakedMesh.chunks {
+            guard let geom = makeChunkRenderGeometry(chunk: chunk) else { continue }
+            geom.materials = [makeAtlasMaterial(atlas: chunk.atlas)]
+            let node = SCNNode(geometry: geom)
+            node.castsShadow = false
+            scene.rootNode.addChildNode(node)
         }
 
-        // ── Physics body (welded geometry) ─────────────────────────────
+        // ── Physics: one body from the welded mesh ──────────────────────
         if let physicsGeom = makePhysicsGeometry() {
-            // Hidden — used only for collision-shape construction.
             let body = SCNPhysicsBody(
                 type: .static,
                 shape: SCNPhysicsShape(
@@ -210,14 +210,12 @@ private struct ExplorerSceneKitView: UIViewRepresentable {
             let physNode = SCNNode(geometry: physicsGeom)
             physNode.geometry?.firstMaterial?.transparency = 0.0
             physNode.physicsBody = body
-            // Hide from the render pass; the atlas-textured mesh is the
-            // visible surface.
             physNode.opacity = 0.0
             physNode.castsShadow = false
             scene.rootNode.addChildNode(physNode)
         }
 
-        // ── Lighting ───────────────────────────────────────────────────
+        // ── Lighting ────────────────────────────────────────────────────
         let amb = SCNNode()
         amb.light = SCNLight()
         amb.light?.type = .ambient
@@ -230,58 +228,49 @@ private struct ExplorerSceneKitView: UIViewRepresentable {
 
     // MARK: - Geometry construction
 
-    /// Build the unwelded render geometry: 3 verts per triangle, every
-    /// vertex carries its tile-corner atlas UV, sequential 0...3N-1
-    /// triangle index.
-    private func makeRenderGeometry() -> SCNGeometry? {
-        let n = bakedMesh.renderTriangleCount
+    /// Build the render geometry for ONE chunk. 3 verts per triangle
+    /// (no shared vertices — each carries its tile-corner atlas UV),
+    /// sequential 0...3N-1 triangle indices, single material later
+    /// applied with the chunk's atlas as diffuse.
+    private func makeChunkRenderGeometry(chunk: BakedChunk) -> SCNGeometry? {
+        let n = chunk.triangleCount
         guard n > 0 else { return nil }
-
         let vertCount = n * 3
 
-        let vertData = bakedMesh.renderVertices.withUnsafeBufferPointer {
+        let vertData = chunk.renderVertices.withUnsafeBufferPointer {
             Data(buffer: $0)
         }
-        let normalData = bakedMesh.renderNormals.withUnsafeBufferPointer {
+        let normalData = chunk.renderNormals.withUnsafeBufferPointer {
             Data(buffer: $0)
         }
-        let uvData = bakedMesh.renderUVs.withUnsafeBufferPointer {
+        let uvData = chunk.renderUVs.withUnsafeBufferPointer {
             Data(buffer: $0)
         }
 
         let vertSrc = SCNGeometrySource(
-            data: vertData,
-            semantic: .vertex,
-            vectorCount: vertCount,
-            usesFloatComponents: true,
+            data: vertData, semantic: .vertex,
+            vectorCount: vertCount, usesFloatComponents: true,
             componentsPerVector: 3,
             bytesPerComponent: MemoryLayout<Float>.size,
-            dataOffset: 0,
-            dataStride: MemoryLayout<SIMD3<Float>>.size
+            dataOffset: 0, dataStride: MemoryLayout<SIMD3<Float>>.size
         )
         let normSrc = SCNGeometrySource(
-            data: normalData,
-            semantic: .normal,
-            vectorCount: vertCount,
-            usesFloatComponents: true,
+            data: normalData, semantic: .normal,
+            vectorCount: vertCount, usesFloatComponents: true,
             componentsPerVector: 3,
             bytesPerComponent: MemoryLayout<Float>.size,
-            dataOffset: 0,
-            dataStride: MemoryLayout<SIMD3<Float>>.size
+            dataOffset: 0, dataStride: MemoryLayout<SIMD3<Float>>.size
         )
         let uvSrc = SCNGeometrySource(
-            data: uvData,
-            semantic: .texcoord,
-            vectorCount: vertCount,
-            usesFloatComponents: true,
+            data: uvData, semantic: .texcoord,
+            vectorCount: vertCount, usesFloatComponents: true,
             componentsPerVector: 2,
             bytesPerComponent: MemoryLayout<Float>.size,
-            dataOffset: 0,
-            dataStride: MemoryLayout<SIMD2<Float>>.size
+            dataOffset: 0, dataStride: MemoryLayout<SIMD2<Float>>.size
         )
 
-        // Sequential 0,1,2,3,...,3N-1 indices. SceneKit refuses geometry
-        // without an element buffer, so we just list every vertex once.
+        // SceneKit needs an element buffer even when indices are
+        // sequential. Generate 0..3N-1.
         var indices = [UInt32](repeating: 0, count: vertCount)
         for i in 0..<vertCount { indices[i] = UInt32(i) }
         let indexData = indices.withUnsafeBufferPointer { Data(buffer: $0) }
@@ -297,7 +286,8 @@ private struct ExplorerSceneKitView: UIViewRepresentable {
 
     /// Build the welded physics geometry: shared vertices + indexed
     /// triangles. Used purely for SCNPhysicsShape concave-polyhedron
-    /// construction. No UVs needed.
+    /// construction. No UVs needed. Spans the whole mesh regardless
+    /// of how many render chunks split it.
     private func makePhysicsGeometry() -> SCNGeometry? {
         guard !bakedMesh.physicsVertices.isEmpty,
               !bakedMesh.physicsTriangles.isEmpty else { return nil }
@@ -305,14 +295,11 @@ private struct ExplorerSceneKitView: UIViewRepresentable {
             Data(buffer: $0)
         }
         let vertSrc = SCNGeometrySource(
-            data: vertData,
-            semantic: .vertex,
+            data: vertData, semantic: .vertex,
             vectorCount: bakedMesh.physicsVertices.count,
-            usesFloatComponents: true,
-            componentsPerVector: 3,
+            usesFloatComponents: true, componentsPerVector: 3,
             bytesPerComponent: MemoryLayout<Float>.size,
-            dataOffset: 0,
-            dataStride: MemoryLayout<SIMD3<Float>>.size
+            dataOffset: 0, dataStride: MemoryLayout<SIMD3<Float>>.size
         )
         let indexData = bakedMesh.physicsTriangles.withUnsafeBufferPointer {
             Data(buffer: $0)
@@ -331,8 +318,7 @@ private struct ExplorerSceneKitView: UIViewRepresentable {
     private func makeAtlasMaterial(atlas: MTLTexture) -> SCNMaterial {
         let m = SCNMaterial()
         m.lightingModel = .constant
-        // SceneKit accepts MTLTexture as material content directly — no
-        // copy-through-CGImage needed.
+        // SceneKit accepts MTLTexture as material content directly.
         m.diffuse.contents = atlas
         m.diffuse.wrapS = .clamp
         m.diffuse.wrapT = .clamp
