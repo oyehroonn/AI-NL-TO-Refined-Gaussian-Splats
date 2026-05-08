@@ -288,18 +288,7 @@ struct CaptureView: View {
 
     private var exploreButton: some View {
         Button {
-            // ORDER MATTERS for the first-launch black-screen fix:
-            //  1. Pause the AR session FIRST. If we delayed this until the
-            //     cover's onAppear, the underlying ARSCNView would still be
-            //     rendering through the first ~hundreds of ms of cover
-            //     presentation — both views share the Metal command queue,
-            //     and the contention drops the explorer's first frames.
-            //  2. THEN take the snapshot. Buffers are still owned by us,
-            //     and ARKit is no longer mutating them.
-            //  3. THEN flip the cover.
-            coordinator.pauseForExploration()
-            explorerSnapshots = texturedMesh.snapshotForExplorer()
-            showingExplorer = true
+            startBake()
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "figure.walk.motion")
@@ -384,6 +373,55 @@ struct CaptureView: View {
     }
 
     private func stopTicker() { ticker?.invalidate(); ticker = nil }
+
+    // MARK: - Atlas bake
+
+    /// Tap handler for the EXPLORE MESH button. Pauses AR (so the GPU is
+    /// free for the bake and the candidate-view pool isn't being mutated),
+    /// snapshots the mesh + candidate views, runs MeshAtlasBaker on a
+    /// background actor, then flips the cover when the BakedMesh is ready.
+    @MainActor
+    private func startBake() {
+        guard !isBaking else { return }
+        coordinator.pauseForExploration()
+
+        // Snapshot the inputs on the main actor (where they are owned).
+        let snaps = texturedMesh.snapshotForExplorer()
+        let candidates = coordinator.snapshotCandidateViews()
+
+        // Sanity: if we have no mesh OR no candidate views, fall back
+        // gracefully without spinning the bake.
+        guard !snaps.isEmpty else {
+            bakeError = "No mesh has been captured yet. Sweep the room a bit longer."
+            return
+        }
+        guard let candidates = candidates, !candidates.frames.isEmpty else {
+            bakeError = "No candidate camera frames in the pool yet. Sweep slowly past a few surfaces and try again."
+            return
+        }
+
+        isBaking = true
+
+        Task.detached(priority: .userInitiated) {
+            do {
+                let baked = try MeshAtlasBaker.bake(
+                    snapshots: snaps,
+                    candidateViews: candidates
+                )
+                await MainActor.run {
+                    self.bakedMesh = baked
+                    self.lastBakeStats = baked.stats
+                    self.isBaking = false
+                    self.showingExplorer = true
+                }
+            } catch {
+                await MainActor.run {
+                    self.bakeError = "Atlas bake failed: \(error)"
+                    self.isBaking = false
+                }
+            }
+        }
+    }
 
     private func timeString(_ t: TimeInterval) -> String {
         let s = Int(t)
