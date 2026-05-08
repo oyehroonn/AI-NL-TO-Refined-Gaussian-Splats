@@ -51,59 +51,59 @@ import simd
 
 /// One atlas worth of baked geometry — its render mesh (3 verts/tri,
 /// no shared vertices, atlas UVs) and its companion atlas texture.
-public struct BakedChunk {
-    public let renderVertices: [SIMD3<Float>]
-    public let renderNormals: [SIMD3<Float>]
-    public let renderUVs: [SIMD2<Float>]
+struct BakedChunk {
+    let renderVertices: [SIMD3<Float>]
+    let renderNormals: [SIMD3<Float>]
+    let renderUVs: [SIMD2<Float>]
     /// Triangle count in THIS chunk only. Atlas covers exactly this many.
-    public let triangleCount: Int
+    let triangleCount: Int
     /// 4K (or 2K for tiny scans) BGRA atlas. Diffuse for this chunk's
     /// material. SceneKit consumes MTLTexture as material.contents
     /// directly — no CGImage round-trip.
-    public let atlas: MTLTexture
-    public let atlasSize: Int
+    let atlas: MTLTexture
+    let atlasSize: Int
 }
 
-public struct BakedMesh {
+struct BakedMesh {
     /// One render chunk per atlas. Tiny scans → 1 chunk. A 200K-triangle
     /// room → 4 chunks, each rendered as its own SCNNode.
-    public let chunks: [BakedChunk]
+    let chunks: [BakedChunk]
 
     /// Welded global mesh — shared vertices, indexed triangles. Used for
     /// the single concavePolyhedron static physics body; no UVs needed.
-    public let physicsVertices: [SIMD3<Float>]
-    public let physicsTriangles: [SIMD3<UInt32>]
+    let physicsVertices: [SIMD3<Float>]
+    let physicsTriangles: [SIMD3<UInt32>]
 
     /// World-space AABB. Drives FirstPersonController spawn.
-    public let worldMin: SIMD3<Float>
-    public let worldMax: SIMD3<Float>
+    let worldMin: SIMD3<Float>
+    let worldMax: SIMD3<Float>
 
-    public let stats: BakeStats
+    let stats: BakeStats
 }
 
-public struct BakeStats {
-    public let triangleCount: Int
-    public let weldedVertexCount: Int
-    public let candidateViewCount: Int
-    public let trianglesWithView: Int      // ≥1 view chosen
-    public let trianglesWithoutView: Int   // sentinel after best-view
-    public let atlasCount: Int
-    public let weldElapsed: TimeInterval
-    public let bestViewElapsed: TimeInterval
-    public let bakeElapsed: TimeInterval   // sum across all atlases
-    public let totalElapsed: TimeInterval
+struct BakeStats {
+    let triangleCount: Int
+    let weldedVertexCount: Int
+    let candidateViewCount: Int
+    let trianglesWithView: Int      // ≥1 view chosen
+    let trianglesWithoutView: Int   // sentinel after best-view
+    let atlasCount: Int
+    let weldElapsed: TimeInterval
+    let bestViewElapsed: TimeInterval
+    let bakeElapsed: TimeInterval   // sum across all atlases
+    let totalElapsed: TimeInterval
 }
 
 /// Phases reported to the bake's progress callback. CaptureView's
 /// "BAKING TEXTURES" overlay reads these to render a continuous,
 /// honest progress bar.
-public enum BakeProgressPhase: Equatable {
+enum BakeProgressPhase: Equatable {
     case welding
     case selectingViews
     case bakingAtlas(index: Int, total: Int)
     case finalizing
 
-    public var label: String {
+    var label: String {
         switch self {
         case .welding:                    return "WELDING MESH"
         case .selectingViews:             return "SELECTING BEST VIEWS"
@@ -115,10 +115,10 @@ public enum BakeProgressPhase: Equatable {
 
 /// (phase, fraction in [0,1]) — fraction is local to the phase, NOT a
 /// global percentage. CaptureView does its own global blending.
-public typealias BakeProgressCallback =
+typealias BakeProgressCallback =
     @Sendable (BakeProgressPhase, Double) -> Void
 
-public enum MeshAtlasBakerError: Error {
+enum MeshAtlasBakerError: Error {
     case noSnapshots
     case noCandidateViews
     case shaderCompileFailed(String)
@@ -130,7 +130,7 @@ public enum MeshAtlasBakerError: Error {
 
 // MARK: - Baker
 
-public enum MeshAtlasBaker {
+enum MeshAtlasBaker {
 
     // ── Tunables ──────────────────────────────────────────────────────
     /// Triangles per atlas. With 16 px tiles + 4096² atlas this is also
@@ -153,7 +153,7 @@ public enum MeshAtlasBaker {
     /// Run the full bake. Synchronous; call from a detached background
     /// Task. The progress callback fires on the same background thread —
     /// CaptureView marshals to main when it reads the values.
-    public static func bake(
+    static func bake(
         snapshots: [TexturedMeshRenderer.ExplorerSnapshot],
         candidateViews: CandidateViewSnapshot,
         onProgress: BakeProgressCallback? = nil
@@ -164,6 +164,12 @@ public enum MeshAtlasBaker {
         }
         let device = candidateViews.device
         let tStart = CFAbsoluteTimeGetCurrent()
+
+        // Compile both Metal kernels ONCE up front (cached for the rest
+        // of the bake). The bake kernel is otherwise recompiled per
+        // atlas — for a 4-atlas room that was up to 1 s of redundant
+        // shader compilation.
+        let pipelines = try makeBakePipelines(device: device)
 
         // ── 1. WELD ──────────────────────────────────────────────────
         onProgress?(.welding, 0.0)
@@ -199,7 +205,7 @@ public enum MeshAtlasBaker {
         // ── 3. BEST-VIEW SELECTION (GPU) ─────────────────────────────
         onProgress?(.selectingViews, 0.0)
         let chosenViews = try selectBestViewsOnGPU(
-            device: device,
+            pipelines: pipelines,
             triangleCount: triCount,
             triCentroid: triCentroid,
             triNormal: triNormal,
@@ -244,6 +250,26 @@ public enum MeshAtlasBaker {
         triCentroid.removeAll(keepingCapacity: false)
         triNormal.removeAll(keepingCapacity: false)
 
+        // ── 6. COARSE PHYSICS MESH ───────────────────────────────────
+        //
+        // Render mesh stays at full quality (100% triangle preservation,
+        // 256 px per face). Physics is a SEPARATE coarse welded mesh —
+        // it's invisible (no UVs, never rendered), used only for the
+        // SCNPhysicsShape concavePolyhedron collision body.
+        //
+        // Why coarse: SCNPhysicsShape concavePolyhedron is empirically
+        // O(N^1.5–2) on triangle count for non-manifold meshes like
+        // ARKit's. On a 200K-triangle mesh it can take 30+ seconds and
+        // **block the main thread**, freezing the entire app while the
+        // explorer cover is being presented. Welding at 8 cm cuts the
+        // physics mesh to 3-5K triangles, so concavePolyhedron builds in
+        // <200 ms — imperceptible.
+        //
+        // Quality impact on the user: zero. They never see this geometry.
+        // The 30 cm capsule collider rounds 8 cm bumps invisibly so walls
+        // still feel flat to walk along.
+        onProgress?(.finalizing, 0.4)
+        let coarseWelded = WeldedMesh.from(snapshots: snapshots, cellSize: 0.08)
         onProgress?(.finalizing, 1.0)
 
         // Stats
@@ -263,8 +289,12 @@ public enum MeshAtlasBaker {
 
         return BakedMesh(
             chunks: bakedChunks,
-            physicsVertices: welded.vertices,
-            physicsTriangles: welded.triangles,
+            // Physics: coarse mesh (8 cm). MUST NOT use the fine welded
+            // mesh here — concavePolyhedron on 100K+ triangles freezes
+            // the main thread when MeshExplorerView builds the body.
+            physicsVertices: coarseWelded.vertices,
+            physicsTriangles: coarseWelded.triangles,
+            // AABB still comes from fine mesh — accurate spawn point.
             worldMin: welded.worldMin,
             worldMax: welded.worldMax,
             stats: stats
@@ -458,12 +488,17 @@ private struct WeldedMesh {
     var worldMin: SIMD3<Float> = SIMD3(.infinity, .infinity, .infinity)
     var worldMax: SIMD3<Float> = SIMD3(-.infinity, -.infinity, -.infinity)
 
-    /// 1 cm grid. ARKit anchor seams are sub-mm so this only resolves true
-    /// duplicates at chunk boundaries. No visible quality loss.
-    static let cellSize: Float = 0.01
-
+    /// Build a welded mesh from per-anchor ExplorerSnapshots. `cellSize`
+    /// controls how aggressively cross-anchor vertices get merged:
+    ///   - 0.01 m (1 cm)  — only true duplicate seams. Render-quality.
+    ///   - 0.05 m (5 cm)  — moderate decimation.
+    ///   - 0.08 m (8 cm)  — physics-quality. ~3-5K triangles for a
+    ///                      typical 200K-triangle room. Fast enough for
+    ///                      `SCNPhysicsShape(concavePolyhedron)` to build
+    ///                      in <200 ms instead of 30+ seconds.
     static func from(
-        snapshots: [TexturedMeshRenderer.ExplorerSnapshot]
+        snapshots: [TexturedMeshRenderer.ExplorerSnapshot],
+        cellSize: Float = 0.01
     ) -> WeldedMesh {
         var mesh = WeldedMesh()
 
@@ -574,6 +609,67 @@ private struct BestViewParams {
     var viewCount: UInt32
 }
 
+/// Both Metal compute pipelines + the shared command queue, compiled and
+/// allocated once per bake. Avoids re-running `device.makeLibrary(source:)`
+/// (which is 100-500 ms first time and cached only within an MTLDevice
+/// lifetime) for every atlas — for a multi-atlas bake that previously
+/// burned a full second on shader compilation alone.
+private struct BakePipelines {
+    let device: MTLDevice
+    let commandQueue: MTLCommandQueue
+    let bestView: MTLComputePipelineState
+    let bakeAtlas: MTLComputePipelineState
+}
+
+private func makeBakePipelines(device: MTLDevice) throws -> BakePipelines {
+    // Compile the best-view selection kernel.
+    let bestViewLib: MTLLibrary
+    do {
+        bestViewLib = try device.makeLibrary(
+            source: kSelectViewShaderSource, options: nil
+        )
+    } catch {
+        throw MeshAtlasBakerError.shaderCompileFailed(error.localizedDescription)
+    }
+    guard let bestViewFn = bestViewLib.makeFunction(name: "selectBestView") else {
+        throw MeshAtlasBakerError.pipelineCreationFailed
+    }
+    let bestViewPL: MTLComputePipelineState
+    do {
+        bestViewPL = try device.makeComputePipelineState(function: bestViewFn)
+    } catch {
+        throw MeshAtlasBakerError.pipelineCreationFailed
+    }
+
+    // Compile the atlas bake kernel.
+    let bakeLib: MTLLibrary
+    do {
+        bakeLib = try device.makeLibrary(source: kBakeShaderSource, options: nil)
+    } catch {
+        throw MeshAtlasBakerError.shaderCompileFailed(error.localizedDescription)
+    }
+    guard let bakeFn = bakeLib.makeFunction(name: "bakeAtlas") else {
+        throw MeshAtlasBakerError.pipelineCreationFailed
+    }
+    let bakePL: MTLComputePipelineState
+    do {
+        bakePL = try device.makeComputePipelineState(function: bakeFn)
+    } catch {
+        throw MeshAtlasBakerError.pipelineCreationFailed
+    }
+
+    guard let queue = device.makeCommandQueue() else {
+        throw MeshAtlasBakerError.pipelineCreationFailed
+    }
+
+    return BakePipelines(
+        device: device,
+        commandQueue: queue,
+        bestView: bestViewPL,
+        bakeAtlas: bakePL
+    )
+}
+
 private let kSelectViewShaderSource: String = """
 #include <metal_stdlib>
 using namespace metal;
@@ -647,31 +743,15 @@ kernel void selectBestView(
 """
 
 private func selectBestViewsOnGPU(
-    device: MTLDevice,
+    pipelines: BakePipelines,
     triangleCount: Int,
     triCentroid: [SIMD3<Float>],
     triNormal: [SIMD3<Float>],
     views: [CandidateViewPool.Frame]
 ) throws -> [UInt16] {
-    let library: MTLLibrary
-    do {
-        library = try device.makeLibrary(source: kSelectViewShaderSource,
-                                          options: nil)
-    } catch {
-        throw MeshAtlasBakerError.shaderCompileFailed(error.localizedDescription)
-    }
-    guard let function = library.makeFunction(name: "selectBestView") else {
-        throw MeshAtlasBakerError.pipelineCreationFailed
-    }
-    let pipeline: MTLComputePipelineState
-    do {
-        pipeline = try device.makeComputePipelineState(function: function)
-    } catch {
-        throw MeshAtlasBakerError.pipelineCreationFailed
-    }
-    guard let queue = device.makeCommandQueue() else {
-        throw MeshAtlasBakerError.pipelineCreationFailed
-    }
+    let device = pipelines.device
+    let pipeline = pipelines.bestView
+    let queue = pipelines.commandQueue
 
     // Pad SIMD3 → SIMD4 so device-side `float4*` reads cleanly.
     var centroid4 = [SIMD4<Float>]()
@@ -902,7 +982,7 @@ kernel void bakeAtlas(
 """
 
 private func bakeAtlasChunked(
-    device: MTLDevice,
+    pipelines: BakePipelines,
     atlas: MTLTexture,
     atlasSize: Int,
     tileSize: Int,
@@ -915,25 +995,9 @@ private func bakeAtlasChunked(
     candidateViews: CandidateViewSnapshot,
     onProgress: (Double) -> Void
 ) throws {
-    // Compile kernel.
-    let library: MTLLibrary
-    do {
-        library = try device.makeLibrary(source: kBakeShaderSource, options: nil)
-    } catch {
-        throw MeshAtlasBakerError.shaderCompileFailed(error.localizedDescription)
-    }
-    guard let function = library.makeFunction(name: "bakeAtlas") else {
-        throw MeshAtlasBakerError.pipelineCreationFailed
-    }
-    let pipeline: MTLComputePipelineState
-    do {
-        pipeline = try device.makeComputePipelineState(function: function)
-    } catch {
-        throw MeshAtlasBakerError.pipelineCreationFailed
-    }
-    guard let queue = device.makeCommandQueue() else {
-        throw MeshAtlasBakerError.pipelineCreationFailed
-    }
+    let device = pipelines.device
+    let pipeline = pipelines.bakeAtlas
+    let queue = pipelines.commandQueue
 
     // Build chunk-local buffers ONCE (reused across sub-chunks).
     // Pad SIMD3 → SIMD4 so device-side float3* reads at 16-byte stride.
