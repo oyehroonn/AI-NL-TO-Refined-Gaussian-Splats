@@ -57,6 +57,24 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         latestSnapshot = nil
     }
 
+    /// Free the per-anchor ring-buffer snapshots (~5 MB × anchor count =
+    /// ~250 MB for a typical room) without touching geometry, the anchor
+    /// dictionary, or the live SCN nodes.
+    ///
+    /// CaptureView calls this after taking ExplorerSnapshots and before
+    /// kicking off the atlas bake — the bake's own temporaries already
+    /// own everything they need, and holding a duplicate copy in memory
+    /// during the bake is exactly what jetsam-kills the app.
+    ///
+    /// Live overlay rebuilds itself naturally on the next willRenderScene
+    /// + didUpdate cycle (typically <2 s). The user does not see a black
+    /// frame because we don't drop the SCN node geometries — only the
+    /// per-anchor ScoredSnapshot ring buffers and the latestSnapshot.
+    func releaseLiveSnapshots() {
+        snapshotsByAnchor.removeAll(keepingCapacity: false)
+        latestSnapshot = nil
+    }
+
     /// Captured anchor data the post-capture explorer needs to rebuild the
     /// mesh in its own SCNScene with collision physics.
     ///
