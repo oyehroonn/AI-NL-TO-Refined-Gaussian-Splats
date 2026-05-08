@@ -297,6 +297,29 @@ private struct ExplorerSceneKitView: UIViewRepresentable {
         m.isDoubleSided = true
         m.writesToDepthBuffer = true      // proper z-ordering
         m.readsFromDepthBuffer = true
+
+        // P0.b — kill the edge-clamp smear.
+        //
+        // The single-view-per-anchor projection produces vertices whose UVs
+        // land outside [0, 1] (off-camera or behind it). With wrapS/wrapT
+        // = .clamp, those fragments sample the texture's literal edge
+        // pixels, producing the long horizontal smears visible across walls.
+        //
+        // We override _output.color when a fragment's UV falls outside a
+        // tight inset of [0, 1], replacing it with a neutral mid-grey.
+        // Untextured slivers now read as flat surfaces — visibly missing,
+        // not visibly wrong. Phase 2 (per-face atlas) will populate these
+        // fragments with their actual best-view photo.
+        m.shaderModifiers = [
+            .fragment: """
+            #pragma transparent
+            float2 _scc_uv = _surface.diffuseTexcoord;
+            if (_scc_uv.x < 0.005 || _scc_uv.x > 0.995 ||
+                _scc_uv.y < 0.005 || _scc_uv.y > 0.995) {
+                _output.color = float4(0.45, 0.45, 0.50, 1.0);
+            }
+            """
+        ]
         return m
     }
 }

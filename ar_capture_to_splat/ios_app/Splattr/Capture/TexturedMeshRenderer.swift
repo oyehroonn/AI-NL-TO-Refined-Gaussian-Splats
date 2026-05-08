@@ -51,7 +51,8 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         }
         trackedNodes.removeAll()
         anchorsByID.removeAll()
-        snapshotByAnchor.removeAll()
+        snapshotsByAnchor.removeAll()
+        anchorCentroidByID.removeAll()
         anchorCount = 0
         latestSnapshot = nil
     }
@@ -199,15 +200,22 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
     /// which is empty for MTLBuffer-based sources.
     private var anchorsByID: [UUID: ARMeshAnchor] = [:]
     private var latestSnapshot: CameraSnapshot?
-    /// Per-anchor first-sighting snapshot. Once an anchor has been textured
-    /// from the camera view at the moment ARKit added it, we **freeze** that
-    /// texture for the lifetime of the anchor. Every subsequent ARKit
-    /// `didUpdate` (which fires as the mesh is refined geometrically) reuses
-    /// this snapshot — otherwise a wall anchor refined while the camera is
-    /// pointed at the floor would silently re-texture the wall with floor
-    /// pixels. This is the heart of Option C: each face shows the real
-    /// camera RGB from when that face was first seen.
-    private var snapshotByAnchor: [UUID: CameraSnapshot] = [:]
+    /// Per-anchor ring buffer of best-scoring candidate snapshots. Each
+    /// anchor keeps up to `maxSnapshotsPerAnchor` photos, ranked by
+    /// `score(snapshot, anchor)`. The renderer always bakes the
+    /// **highest-scoring** candidate, so an anchor's texture moves toward
+    /// the photo where the camera was actually pointed at it from a good
+    /// distance with a sharp shutter. Replaces the legacy "freeze the
+    /// first-sighting snapshot forever" approach which gave us long
+    /// horizontal smears and ceiling pixels on walls.
+    private var snapshotsByAnchor: [UUID: [ScoredSnapshot]] = [:]
+
+    /// Cached world-space centroid per anchor — the rough "where is this
+    /// chunk of mesh in the room" point that scoring uses. Cheaper than
+    /// recomputing it from anchor.geometry.vertices on every snapshot
+    /// pump (~10 Hz × N anchors × M vertices ≈ a few μs but adds up).
+    /// Refreshed on every didAdd / didUpdate.
+    private var anchorCentroidByID: [UUID: SIMD3<Float>] = [:]
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
 
     /// Texture target side length. 512 is plenty for the hand-held overlay
@@ -218,7 +226,34 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         let image: UIImage
         let viewMatrix: simd_float4x4         // world → camera (ARKit landscape)
         let projectionMatrix: simd_float4x4   // camera → NDC
+        /// World-space camera origin. Cached on the snapshot so scoring it
+        /// against an anchor doesn't have to invert viewMatrix every time.
+        let cameraPosition: SIMD3<Float>
+        /// World-space camera forward (the -Z axis of the ARKit camera).
+        let cameraForward: SIMD3<Float>
+        /// Sharpness in [0, 1]. Derived from BlurDetector's Laplacian
+        /// variance and clipped to [0, 1] so it can be folded into a score
+        /// product directly.
+        let sharpness: Float
+        /// Wall-clock timestamp the snapshot was captured at, for debugging
+        /// and for tie-breaking between candidate snapshots with similar
+        /// scores (prefer the more recent one — captures latest exposure).
+        let timestamp: TimeInterval
     }
+
+    /// A snapshot bundled with its score against ONE specific anchor.
+    /// Stored in `snapshotsByAnchor` so we can rank candidates and pick the
+    /// best one without recomputing scores every frame.
+    private struct ScoredSnapshot {
+        let snapshot: CameraSnapshot
+        var score: Float
+    }
+
+    /// How many candidate snapshots we keep per anchor. 5 is enough to
+    /// cover the typical "user walks past, looks at it briefly from a few
+    /// angles" pattern and bounds memory at ~5 × textureMaxDimension² ×
+    /// 4 bytes per anchor (~5 MB for 50 anchors at 512px).
+    private let maxSnapshotsPerAnchor: Int = 5
 
     // MARK: - SCNSceneRendererDelegate
 
@@ -272,7 +307,8 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         Task { @MainActor [weak self] in
             self?.trackedNodes.removeValue(forKey: id)
             self?.anchorsByID.removeValue(forKey: id)
-            self?.snapshotByAnchor.removeValue(forKey: id)
+            self?.snapshotsByAnchor.removeValue(forKey: id)
+            self?.anchorCentroidByID.removeValue(forKey: id)
             self?.anchorCount = self?.trackedNodes.count ?? 0
         }
     }
@@ -291,9 +327,19 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
     }
 
     private func makeSnapshot(from frame: ARFrame) -> CameraSnapshot? {
+        // Sharpness FIRST, against the full-resolution pixel buffer —
+        // BlurDetector is internally tolerant to resolution but a full
+        // luma plane gives a more reliable Laplacian variance.
+        let sharpRaw = BlurDetector.score(for: frame.capturedImage)
+        // Empirical normalisation: <30 = very blurry, 30-60 = motion blur,
+        // 60-120 = ok, >120 = sharp. Map [0, 200] → [0, 1] linearly and
+        // clip. This puts most "good" frames in [0.5, 1.0] and motion-
+        // blurred frames in [0.0, 0.3], which is the dynamic range we
+        // want when multiplying scores together.
+        let sharpness: Float = Float(min(1.0, max(0.0, sharpRaw / 200.0)))
+
         // Downsize the captured pixel buffer to keep memory bounded.
-        let pixelBuffer = frame.capturedImage
-        var ci = CIImage(cvPixelBuffer: pixelBuffer)
+        var ci = CIImage(cvPixelBuffer: frame.capturedImage)
         let originalExtent = ci.extent
         let scale = textureMaxDimension /
                     max(originalExtent.width, originalExtent.height)
@@ -304,6 +350,7 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
             return nil
         }
         let image = UIImage(cgImage: cg)
+
         // ARKit camera matrices for landscape sensor orientation. We use
         // landscapeRight (the natural ARKit pixel-buffer orientation) so
         // matrices align with the un-rotated image we just baked.
@@ -315,10 +362,29 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
             zFar: 50.0
         )
         let view = frame.camera.viewMatrix(for: .landscapeRight)
+
+        // World-space camera pose for scoring. The raw ARKit camera
+        // transform is orientation-independent (the iPhone's camera in
+        // world space) — use it rather than inverting the landscape view
+        // matrix, which would re-introduce orientation rotation.
+        let camWorld = frame.camera.transform
+        let camPos = SIMD3<Float>(camWorld.columns.3.x,
+                                  camWorld.columns.3.y,
+                                  camWorld.columns.3.z)
+        // ARKit cameras look down -Z in their local frame; world forward
+        // is the negated z-axis column of the camera world transform.
+        let camFwd = simd_normalize(SIMD3<Float>(-camWorld.columns.2.x,
+                                                 -camWorld.columns.2.y,
+                                                 -camWorld.columns.2.z))
+
         return CameraSnapshot(
             image: image,
             viewMatrix: view,
-            projectionMatrix: proj
+            projectionMatrix: proj,
+            cameraPosition: camPos,
+            cameraForward: camFwd,
+            sharpness: sharpness,
+            timestamp: frame.timestamp
         )
     }
 
