@@ -317,13 +317,13 @@ private struct WeldedMesh {
 
             // Read triangles, rewrite indices, accumulate face normals.
             let triCount = snap.triangleCount
-            snap.indexData.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            snap.indexData.withUnsafeBytes { (rawIdx: UnsafeRawBufferPointer) in
                 func tri(at t: Int) -> (Int, Int, Int) {
                     if snap.bytesPerIndex == 4 {
-                        let p = raw.bindMemory(to: UInt32.self)
+                        let p = rawIdx.bindMemory(to: UInt32.self)
                         return (Int(p[t * 3]), Int(p[t * 3 + 1]), Int(p[t * 3 + 2]))
                     } else {
-                        let p = raw.bindMemory(to: UInt16.self)
+                        let p = rawIdx.bindMemory(to: UInt16.self)
                         return (Int(p[t * 3]), Int(p[t * 3 + 1]), Int(p[t * 3 + 2]))
                     }
                 }
@@ -340,9 +340,9 @@ private struct WeldedMesh {
                     let v0 = mesh.vertices[Int(g0)]
                     let v1 = mesh.vertices[Int(g1)]
                     let v2 = mesh.vertices[Int(g2)]
-                    let raw = simd_cross(v1 - v0, v2 - v0)
-                    let len = simd_length(raw)
-                    let n: SIMD3<Float> = len > 1e-8 ? raw / len : SIMD3<Float>(0, 1, 0)
+                    let cross = simd_cross(v1 - v0, v2 - v0)
+                    let len = simd_length(cross)
+                    let n: SIMD3<Float> = len > 1e-8 ? cross / len : SIMD3<Float>(0, 1, 0)
                     normalAccum[Int(g0)] += n
                     normalAccum[Int(g1)] += n
                     normalAccum[Int(g2)] += n

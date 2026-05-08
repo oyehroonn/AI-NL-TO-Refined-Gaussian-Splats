@@ -34,17 +34,24 @@ struct CaptureView: View {
     @State private var ticker: Timer?
     @State private var sectorFractions: [Double] = Array(repeating: 0, count: 8)
 
-    /// Snapshots fed into the post-scan explorer when the user taps the
-    /// Explore button. Populated lazily — we only snapshot when they ask,
-    /// so the live capture path stays cheap.
-    @State private var explorerSnapshots: [TexturedMeshRenderer.ExplorerSnapshot] = []
+    /// Phase 2 — atlas-baked mesh handed to MeshExplorerView. Populated
+    /// when the user taps "Explore Mesh" and the bake completes.
+    @State private var bakedMesh: BakedMesh? = nil
     @State private var showingExplorer: Bool = false
+    /// True while MeshAtlasBaker.bake is running on a background actor.
+    /// CaptureView shows a "BAKING TEXTURES" scrim during this window;
+    /// AR session is already paused so the GPU is free for the bake.
+    @State private var isBaking: Bool = false
+    @State private var bakeError: String? = nil
+    /// Last bake's stats — surfaced to the HUD on success.
+    @State private var lastBakeStats: BakeStats? = nil
 
     var body: some View {
         ZStack {
             preview
             scrim
             hud
+            if isBaking { bakingOverlay }
         }
         .ignoresSafeArea()
         .alert("Capture error",
@@ -53,6 +60,16 @@ struct CaptureView: View {
             Button("Back") { router.reset() }
         } message: {
             Text(error ?? "")
+        }
+        .alert("Bake failed",
+               isPresented: .init(get: { bakeError != nil },
+                                  set: { if !$0 { bakeError = nil } })) {
+            Button("OK") {
+                bakeError = nil
+                coordinator.resumeFromExploration()
+            }
+        } message: {
+            Text(bakeError ?? "")
         }
         .onAppear {
             coordinator.onFinished = { frames in
@@ -93,13 +110,54 @@ struct CaptureView: View {
             // Resume AR scanning where we left off. The world map +
             // anchors are preserved by ARCaptureCoordinator across the
             // pause so the user can keep extending the mesh.
+            bakedMesh = nil
             coordinator.resumeFromExploration()
         }) {
-            // pauseForExploration() already fired in the explore-button
-            // tap handler — see the comment there. The cover content
-            // appears with the AR session already paused.
-            MeshExplorerView(snapshots: explorerSnapshots)
+            // The bake completed before this cover became eligible to
+            // present; bakedMesh is guaranteed non-nil here.
+            if let mesh = bakedMesh {
+                MeshExplorerView(bakedMesh: mesh)
+            } else {
+                // Defensive — should never happen.
+                Color.black.ignoresSafeArea()
+            }
         }
+    }
+
+    // MARK: baking overlay
+
+    /// Full-screen scrim shown over the (now-frozen) capture preview while
+    /// MeshAtlasBaker runs on a background actor. The scan stays visible
+    /// underneath so the user has spatial context, just dimmed.
+    private var bakingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.65).ignoresSafeArea()
+            VStack(spacing: 18) {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .tint(Theme.Color.halo)
+                    .scaleEffect(1.4)
+                Text("BAKING TEXTURES")
+                    .font(.system(size: 14, weight: .heavy)).tracking(2.4)
+                    .foregroundStyle(.white)
+                Text("Fusing every captured camera frame into a single 4K atlas")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.65))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 260)
+            }
+            .padding(28)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(.ultraThinMaterial)
+                    .environment(\.colorScheme, .dark)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(Theme.Color.halo.opacity(0.45), lineWidth: 0.8)
+            )
+        }
+        .transition(.opacity)
     }
 
     // MARK: pieces

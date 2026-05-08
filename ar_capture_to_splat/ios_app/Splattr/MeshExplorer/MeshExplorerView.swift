@@ -1,24 +1,21 @@
 //
 //  MeshExplorerView.swift
-//  AR-Layer 2.5 — Gold tier post-scan explorer.
+//  Phase 2 — Gold tier post-scan explorer, atlas-baked.
 //
-//  After the user has built up a textured mesh in CaptureView, this screen
-//  lets them WALK AROUND inside that mesh as a first-person 3D environment:
-//    - Each ARMeshAnchor (deep-copied at snapshot time) becomes a static
-//      SCNPhysicsBody with a concave-polyhedron collision shape derived
-//      from its triangles.
-//    - The player is a dynamic capsule body. Horizontal velocity is
-//      driven directly from the joystick; vertical velocity is left to
-//      SceneKit's gravity so we stay on the floor.
-//    - Yaw is applied to the camera (not the player) so a dynamic-body
-//      physics simulation can never fight the look pad.
-//    - Spawn point is the world-space AABB center, 1.6 m above the
-//      lowest geometry — guaranteed not to start inside a wall.
+//  After the user taps "Explore Mesh", MeshAtlasBaker fuses every captured
+//  ARMeshAnchor into a single welded mesh and per-face MVS-bakes a 4K
+//  atlas from the candidate-view pool. This screen receives the resulting
+//  `BakedMesh` and renders it as a single first-person walkable scene:
 //
-//  The mesh data passed in via [ExplorerSnapshot] is fully owned: every
-//  vertex/index/normal/UV byte was deep-copied from ARKit's Metal buffers
-//  in TexturedMeshRenderer.snapshotForExplorer(), so the AR session can
-//  keep refining anchors underneath without affecting this scene.
+//    - Render geometry: 3 verts per triangle, no shared vertices, every
+//      vertex carries a unique atlas UV. One material with the bake's
+//      MTLTexture as diffuse — opaque, depth-writing, double-sided.
+//    - Physics: separate welded mesh used for SCNPhysicsShape concave-
+//      polyhedron collision so the player's capsule walks on the floor
+//      and slides along walls.
+//    - Player: dynamic capsule body, horizontal velocity from joystick,
+//      vertical velocity left to gravity. Yaw applied to camera only.
+//    - Spawn: world-space AABB center, 1.6 m above lowest geometry.
 //
 
 import SwiftUI
@@ -30,7 +27,7 @@ import simd
 
 struct MeshExplorerView: View {
 
-    let snapshots: [TexturedMeshRenderer.ExplorerSnapshot]
+    let bakedMesh: BakedMesh
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var controller = FirstPersonController()
@@ -40,7 +37,7 @@ struct MeshExplorerView: View {
         ZStack {
             // Render layer
             ExplorerSceneKitView(
-                snapshots: snapshots,
+                bakedMesh: bakedMesh,
                 controller: controller
             )
             .ignoresSafeArea()
@@ -142,7 +139,7 @@ struct MeshExplorerView: View {
 // ── SCNView host ─────────────────────────────────────────────────────────────
 
 private struct ExplorerSceneKitView: UIViewRepresentable {
-    let snapshots: [TexturedMeshRenderer.ExplorerSnapshot]
+    let bakedMesh: BakedMesh
     let controller: FirstPersonController
 
     func makeUIView(context: Context) -> SCNView {
@@ -155,7 +152,14 @@ private struct ExplorerSceneKitView: UIViewRepresentable {
         v.rendersContinuously = true
         let built = buildScene()
         v.scene = built.scene
-        controller.attach(scene: built.scene, sceneView: v, sceneBounds: built.bounds)
+        controller.attach(
+            scene: built.scene,
+            sceneView: v,
+            sceneBounds: SceneBoundsDescriptor(
+                minBound: bakedMesh.worldMin,
+                maxBound: bakedMesh.worldMax
+            )
+        )
         return v
     }
 
@@ -163,163 +167,182 @@ private struct ExplorerSceneKitView: UIViewRepresentable {
         // Scene is built once and lives for the explorer's lifetime.
     }
 
-    private struct BuiltScene {
-        let scene: SCNScene
-        let bounds: SceneBoundsDescriptor
-    }
+    private struct BuiltScene { let scene: SCNScene }
 
-    /// Build a fresh SCNScene from the captured mesh snapshots and return
-    /// the scene plus its world-space AABB. Each anchor becomes a node with:
-    ///   - A rebuilt SCNGeometry whose buffers are the snapshot's owned Data.
-    ///   - An opaque, depth-writing texture material so we can actually see
-    ///     the photo of the room (not the AR-overlay translucent material).
-    ///   - A static SCNPhysicsBody with concavePolyhedron collision so the
-    ///     player's capsule walks on the floor and bounces off walls.
+    /// Build the SCNScene from the BakedMesh:
+    ///   - Render node: one SCNGeometry from the unwelded render mesh
+    ///     (3 verts per triangle, sequential indices) with the baked
+    ///     atlas as the diffuse material. No shader-modifier needed —
+    ///     the atlas already covers every triangle's tile, with grey
+    ///     waste pixels inside the tile margins (never sampled at
+    ///     runtime because the tile UVs land within the triangular
+    ///     region).
+    ///   - Physics node: one SCNGeometry from the welded mesh (shared
+    ///     vertices) used purely for the static concavePolyhedron
+    ///     collision shape. Hidden from rendering.
+    ///   - Soft ambient + tiny key directional. Atlas is `.constant`
+    ///     so lights only matter when SceneKit's pipeline blends ambient.
     private func buildScene() -> BuiltScene {
         let scene = SCNScene()
         scene.physicsWorld.gravity = SCNVector3(0, -9.81, 0)
+        scene.physicsWorld.timeStep = 1.0 / 90.0  // smoother walking
 
-        // Aggregate AABB across all snapshots — drives the player spawn.
-        var wmin = SIMD3<Float>( .infinity,  .infinity,  .infinity)
-        var wmax = SIMD3<Float>(-.infinity, -.infinity, -.infinity)
-
-        for snap in snapshots {
-            guard let geom = makeGeometry(from: snap) else { continue }
-            geom.materials = [makeExplorerMaterial(image: snap.textureImage)]
-
-            let node = SCNNode(geometry: geom)
-            // The geometry's vertex positions are in anchor-local space; we
-            // re-apply the anchor's worldTransform on the node itself so the
-            // mesh sits in its captured world location (and the physics
-            // shape is built against the world-space geometry).
-            node.simdTransform = snap.worldTransform
-
-            // concavePolyhedron only works against a triangle-list element.
-            // Our geometry has exactly that. SceneKit will silently fail if
-            // the shape is degenerate; we accept that risk and skip the
-            // body for tiny anchors.
-            if snap.triangleCount >= 4 {
-                let shape = SCNPhysicsShape(
-                    geometry: geom,
-                    options: [
-                        .type: SCNPhysicsShape.ShapeType.concavePolyhedron,
-                    ]
-                )
-                node.physicsBody = SCNPhysicsBody(type: .static, shape: shape)
-                node.physicsBody?.friction = 0.6
-                node.physicsBody?.restitution = 0.0
-            }
-
-            scene.rootNode.addChildNode(node)
-
-            wmin = simd_min(wmin, snap.worldMin)
-            wmax = simd_max(wmax, snap.worldMax)
+        // ── Render geometry (atlas-textured) ───────────────────────────
+        if let renderGeom = makeRenderGeometry() {
+            renderGeom.materials = [makeAtlasMaterial(atlas: bakedMesh.atlas)]
+            let renderNode = SCNNode(geometry: renderGeom)
+            renderNode.castsShadow = false
+            scene.rootNode.addChildNode(renderNode)
         }
 
-        // Lighting — `.constant` material doesn't actually need lighting
-        // but SceneKit honours ambient on it, so a soft ambient still
-        // freshens dim corners.
+        // ── Physics body (welded geometry) ─────────────────────────────
+        if let physicsGeom = makePhysicsGeometry() {
+            // Hidden — used only for collision-shape construction.
+            let body = SCNPhysicsBody(
+                type: .static,
+                shape: SCNPhysicsShape(
+                    geometry: physicsGeom,
+                    options: [.type: SCNPhysicsShape.ShapeType.concavePolyhedron]
+                )
+            )
+            body.friction = 0.6
+            body.restitution = 0.0
+            let physNode = SCNNode(geometry: physicsGeom)
+            physNode.geometry?.firstMaterial?.transparency = 0.0
+            physNode.physicsBody = body
+            // Hide from the render pass; the atlas-textured mesh is the
+            // visible surface.
+            physNode.opacity = 0.0
+            physNode.castsShadow = false
+            scene.rootNode.addChildNode(physNode)
+        }
+
+        // ── Lighting ───────────────────────────────────────────────────
         let amb = SCNNode()
         amb.light = SCNLight()
         amb.light?.type = .ambient
-        amb.light?.intensity = 600
+        amb.light?.intensity = 1000
         amb.light?.color = UIColor.white
         scene.rootNode.addChildNode(amb)
 
-        // Fallback bounds if no snapshots arrived (defensive).
-        if !wmin.x.isFinite || !wmax.x.isFinite {
-            wmin = SIMD3(-2, -1, -2)
-            wmax = SIMD3( 2,  2,  2)
-        }
-        return BuiltScene(
-            scene: scene,
-            bounds: SceneBoundsDescriptor(minBound: wmin, maxBound: wmax)
-        )
+        return BuiltScene(scene: scene)
     }
 
-    /// Build a SCNGeometry from owned Data blobs — no shared MTLBuffer.
-    private func makeGeometry(
-        from snap: TexturedMeshRenderer.ExplorerSnapshot
-    ) -> SCNGeometry? {
-        guard snap.vertexCount > 0, snap.triangleCount > 0 else { return nil }
+    // MARK: - Geometry construction
 
-        let vertSource = SCNGeometrySource(
-            data: snap.vertexData,
+    /// Build the unwelded render geometry: 3 verts per triangle, every
+    /// vertex carries its tile-corner atlas UV, sequential 0...3N-1
+    /// triangle index.
+    private func makeRenderGeometry() -> SCNGeometry? {
+        let n = bakedMesh.renderTriangleCount
+        guard n > 0 else { return nil }
+
+        let vertCount = n * 3
+
+        let vertData = bakedMesh.renderVertices.withUnsafeBufferPointer {
+            Data(buffer: $0)
+        }
+        let normalData = bakedMesh.renderNormals.withUnsafeBufferPointer {
+            Data(buffer: $0)
+        }
+        let uvData = bakedMesh.renderUVs.withUnsafeBufferPointer {
+            Data(buffer: $0)
+        }
+
+        let vertSrc = SCNGeometrySource(
+            data: vertData,
             semantic: .vertex,
-            vectorCount: snap.vertexCount,
+            vectorCount: vertCount,
             usesFloatComponents: true,
             componentsPerVector: 3,
             bytesPerComponent: MemoryLayout<Float>.size,
             dataOffset: 0,
             dataStride: MemoryLayout<SIMD3<Float>>.size
         )
-
-        var sources: [SCNGeometrySource] = [vertSource]
-        if snap.normalCount == snap.vertexCount, !snap.normalData.isEmpty {
-            sources.append(SCNGeometrySource(
-                data: snap.normalData,
-                semantic: .normal,
-                vectorCount: snap.normalCount,
-                usesFloatComponents: true,
-                componentsPerVector: 3,
-                bytesPerComponent: MemoryLayout<Float>.size,
-                dataOffset: 0,
-                dataStride: MemoryLayout<SIMD3<Float>>.size
-            ))
-        }
-        sources.append(SCNGeometrySource(
-            data: snap.uvData,
+        let normSrc = SCNGeometrySource(
+            data: normalData,
+            semantic: .normal,
+            vectorCount: vertCount,
+            usesFloatComponents: true,
+            componentsPerVector: 3,
+            bytesPerComponent: MemoryLayout<Float>.size,
+            dataOffset: 0,
+            dataStride: MemoryLayout<SIMD3<Float>>.size
+        )
+        let uvSrc = SCNGeometrySource(
+            data: uvData,
             semantic: .texcoord,
-            vectorCount: snap.vertexCount,
+            vectorCount: vertCount,
             usesFloatComponents: true,
             componentsPerVector: 2,
             bytesPerComponent: MemoryLayout<Float>.size,
             dataOffset: 0,
             dataStride: MemoryLayout<SIMD2<Float>>.size
-        ))
-
-        let element = SCNGeometryElement(
-            data: snap.indexData,
-            primitiveType: .triangles,
-            primitiveCount: snap.triangleCount,
-            bytesPerIndex: snap.bytesPerIndex
         )
-        return SCNGeometry(sources: sources, elements: [element])
+
+        // Sequential 0,1,2,3,...,3N-1 indices. SceneKit refuses geometry
+        // without an element buffer, so we just list every vertex once.
+        var indices = [UInt32](repeating: 0, count: vertCount)
+        for i in 0..<vertCount { indices[i] = UInt32(i) }
+        let indexData = indices.withUnsafeBufferPointer { Data(buffer: $0) }
+        let element = SCNGeometryElement(
+            data: indexData,
+            primitiveType: .triangles,
+            primitiveCount: n,
+            bytesPerIndex: MemoryLayout<UInt32>.size
+        )
+        return SCNGeometry(sources: [vertSrc, normSrc, uvSrc],
+                            elements: [element])
     }
 
-    private func makeExplorerMaterial(image: UIImage) -> SCNMaterial {
+    /// Build the welded physics geometry: shared vertices + indexed
+    /// triangles. Used purely for SCNPhysicsShape concave-polyhedron
+    /// construction. No UVs needed.
+    private func makePhysicsGeometry() -> SCNGeometry? {
+        guard !bakedMesh.physicsVertices.isEmpty,
+              !bakedMesh.physicsTriangles.isEmpty else { return nil }
+        let vertData = bakedMesh.physicsVertices.withUnsafeBufferPointer {
+            Data(buffer: $0)
+        }
+        let vertSrc = SCNGeometrySource(
+            data: vertData,
+            semantic: .vertex,
+            vectorCount: bakedMesh.physicsVertices.count,
+            usesFloatComponents: true,
+            componentsPerVector: 3,
+            bytesPerComponent: MemoryLayout<Float>.size,
+            dataOffset: 0,
+            dataStride: MemoryLayout<SIMD3<Float>>.size
+        )
+        let indexData = bakedMesh.physicsTriangles.withUnsafeBufferPointer {
+            Data(buffer: $0)
+        }
+        let element = SCNGeometryElement(
+            data: indexData,
+            primitiveType: .triangles,
+            primitiveCount: bakedMesh.physicsTriangles.count,
+            bytesPerIndex: MemoryLayout<UInt32>.size
+        )
+        return SCNGeometry(sources: [vertSrc], elements: [element])
+    }
+
+    // MARK: - Material
+
+    private func makeAtlasMaterial(atlas: MTLTexture) -> SCNMaterial {
         let m = SCNMaterial()
-        m.lightingModel = .constant       // textures already encode the look
-        m.diffuse.contents = image
+        m.lightingModel = .constant
+        // SceneKit accepts MTLTexture as material content directly — no
+        // copy-through-CGImage needed.
+        m.diffuse.contents = atlas
         m.diffuse.wrapS = .clamp
         m.diffuse.wrapT = .clamp
-        m.transparency = 1.0              // OPAQUE — explorer has no AR feed
+        m.diffuse.minificationFilter = .linear
+        m.diffuse.magnificationFilter = .linear
+        m.diffuse.mipFilter = .nearest
+        m.transparency = 1.0
         m.isDoubleSided = true
-        m.writesToDepthBuffer = true      // proper z-ordering
+        m.writesToDepthBuffer = true
         m.readsFromDepthBuffer = true
-
-        // P0.b — kill the edge-clamp smear.
-        //
-        // The single-view-per-anchor projection produces vertices whose UVs
-        // land outside [0, 1] (off-camera or behind it). With wrapS/wrapT
-        // = .clamp, those fragments sample the texture's literal edge
-        // pixels, producing the long horizontal smears visible across walls.
-        //
-        // We override _output.color when a fragment's UV falls outside a
-        // tight inset of [0, 1], replacing it with a neutral mid-grey.
-        // Untextured slivers now read as flat surfaces — visibly missing,
-        // not visibly wrong. Phase 2 (per-face atlas) will populate these
-        // fragments with their actual best-view photo.
-        m.shaderModifiers = [
-            .fragment: """
-            #pragma transparent
-            float2 _scc_uv = _surface.diffuseTexcoord;
-            if (_scc_uv.x < 0.005 || _scc_uv.x > 0.995 ||
-                _scc_uv.y < 0.005 || _scc_uv.y > 0.995) {
-                _output.color = float4(0.45, 0.45, 0.50, 1.0);
-            }
-            """
-        ]
         return m
     }
 }
