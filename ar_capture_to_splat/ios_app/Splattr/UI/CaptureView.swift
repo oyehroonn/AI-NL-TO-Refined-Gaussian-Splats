@@ -34,29 +34,18 @@ struct CaptureView: View {
     @State private var ticker: Timer?
     @State private var sectorFractions: [Double] = Array(repeating: 0, count: 8)
 
-    /// Phase 2 — atlas-baked mesh handed to MeshExplorerView. Populated
-    /// when the user taps "Explore Mesh" and the bake completes.
-    @State private var bakedMesh: BakedMesh? = nil
+    /// Per-anchor explorer snapshots (Phase 1 path — proven colorful).
+    /// Populated synchronously when the user taps "Explore Mesh" — no
+    /// bake step, no overlay, instant cover present.
+    @State private var explorerSnapshots: [TexturedMeshRenderer.ExplorerSnapshot] = []
     @State private var showingExplorer: Bool = false
-    /// True while MeshAtlasBaker.bake is running on a background actor.
-    /// CaptureView shows a "BAKING TEXTURES" scrim during this window;
-    /// AR session is already paused so the GPU is free for the bake.
-    @State private var isBaking: Bool = false
     @State private var bakeError: String? = nil
-    /// Last bake's stats — surfaced to the HUD on success.
-    @State private var lastBakeStats: BakeStats? = nil
-    /// Live progress label rendered in the baking overlay. The bake fires
-    /// (phase, fraction) callbacks on its background thread; the
-    /// startBake() main-actor hop translates them into this string.
-    @State private var bakeStatusLabel: String = "PREPARING"
-    @State private var bakeStatusFraction: Double = 0.0
 
     var body: some View {
         ZStack {
             preview
             scrim
             hud
-            if isBaking { bakingOverlay }
         }
         .ignoresSafeArea()
         .alert("Capture error",
@@ -66,7 +55,7 @@ struct CaptureView: View {
         } message: {
             Text(error ?? "")
         }
-        .alert("Bake failed",
+        .alert("Explore",
                isPresented: .init(get: { bakeError != nil },
                                   set: { if !$0 { bakeError = nil } })) {
             Button("OK") {
@@ -115,61 +104,11 @@ struct CaptureView: View {
             // Resume AR scanning where we left off. The world map +
             // anchors are preserved by ARCaptureCoordinator across the
             // pause so the user can keep extending the mesh.
-            bakedMesh = nil
+            explorerSnapshots = []
             coordinator.resumeFromExploration()
         }) {
-            // The bake completed before this cover became eligible to
-            // present; bakedMesh is guaranteed non-nil here.
-            if let mesh = bakedMesh {
-                MeshExplorerView(bakedMesh: mesh)
-            } else {
-                // Defensive — should never happen.
-                Color.black.ignoresSafeArea()
-            }
+            MeshExplorerView(snapshots: explorerSnapshots)
         }
-    }
-
-    // MARK: baking overlay
-
-    /// Full-screen scrim shown over the (now-frozen) capture preview while
-    /// MeshAtlasBaker runs on a background actor. Reads bakeStatusLabel +
-    /// bakeStatusFraction (kept in sync by the bake's progress callback)
-    /// so the user sees continuous, honest progress instead of an
-    /// indefinite spinner.
-    private var bakingOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.65).ignoresSafeArea()
-            VStack(spacing: 14) {
-                ProgressView(value: bakeStatusFraction, total: 1.0)
-                    .progressViewStyle(.linear)
-                    .tint(Theme.Color.halo)
-                    .frame(width: 200)
-                Text(bakeStatusLabel)
-                    .font(.system(size: 13, weight: .heavy)).tracking(2.0)
-                    .foregroundStyle(.white)
-                    .animation(.easeInOut(duration: 0.2), value: bakeStatusLabel)
-                Text("\(Int(bakeStatusFraction * 100))%")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.7))
-                Text("Fusing every captured camera frame into a 4K texture atlas. Phone stays responsive — this takes a few seconds.")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.55))
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 260)
-                    .padding(.top, 6)
-            }
-            .padding(28)
-            .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(.ultraThinMaterial)
-                    .environment(\.colorScheme, .dark)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 16)
-                    .stroke(Theme.Color.halo.opacity(0.45), lineWidth: 0.8)
-            )
-        }
-        .transition(.opacity)
     }
 
     // MARK: pieces
@@ -300,7 +239,7 @@ struct CaptureView: View {
 
     private var exploreButton: some View {
         Button {
-            startBake()
+            startExploration()
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "figure.walk.motion")
@@ -390,90 +329,25 @@ struct CaptureView: View {
 
     /// Tap handler for the EXPLORE MESH button.
     ///
-    /// Order matters here:
-    ///  1. Pause AR — frees GPU for the bake, stops candidate pool mutation.
-    ///  2. Snapshot mesh + candidate views (deep-copy where needed).
-    ///  3. **Free the live ring buffer** in TexturedMeshRenderer (saves
-    ///     ~250 MB of RAM that was only useful while scanning). The live
-    ///     overlay rebuilds itself in <2 s after the user dismisses the
-    ///     explorer and resumes scanning.
-    ///  4. Kick off MeshAtlasBaker on a detached background task. The
-    ///     bake fires (phase, fraction) progress callbacks on its
-    ///     background thread; we hop them to MainActor for state updates.
-    ///  5. When the bake finishes, flip the cover.
+    /// Per-anchor rendering path (Phase 1, proven colorful in the bed-
+    /// corner shot). Synchronous: pause AR → snapshot → flip cover. No
+    /// bake, no overlay, no progress bar. Cover presents within a frame.
+    /// MeshExplorerView builds the per-anchor scene + coarse-welded
+    /// physics body in its makeUIView.
     @MainActor
-    private func startBake() {
-        guard !isBaking else { return }
+    private func startExploration() {
         coordinator.pauseForExploration()
-
         let snaps = texturedMesh.snapshotForExplorer()
-        let candidates = coordinator.snapshotCandidateViews()
-
         guard !snaps.isEmpty else {
             bakeError = "No mesh has been captured yet. Sweep the room a bit longer."
             return
         }
-        guard let candidates = candidates, !candidates.frames.isEmpty else {
-            bakeError = "No candidate camera frames in the pool yet. Sweep slowly past a few surfaces and try again."
-            return
-        }
-
-        // Free the per-anchor ring buffers before the bake. These are
-        // ~250 MB on a typical room — competing with the bake for memory
-        // and the largest single pressure source on jetsam.
+        // Free the per-anchor ring buffers — explorer's ExplorerSnapshot
+        // copies already own everything they need. The live overlay
+        // rebuilds itself when the user dismisses and resumes scanning.
         texturedMesh.releaseLiveSnapshots()
-
-        isBaking = true
-        bakeStatusLabel = "STARTING"
-        bakeStatusFraction = 0.0
-
-        Task.detached(priority: .userInitiated) {
-            // Progress callback fires on this background thread. Hop to
-            // MainActor for every state update — never call SwiftUI
-            // @State setters off-main.
-            let progress: BakeProgressCallback = { phase, fraction in
-                let label = phase.label
-                let global: Double
-                // Crude global blend: weld 5%, best-view 10%, atlases 80%,
-                // finalize 5%. Lets the linear ProgressView feel like
-                // continuous progress across phases instead of jumping.
-                switch phase {
-                case .welding:
-                    global = 0.05 * fraction
-                case .selectingViews:
-                    global = 0.05 + 0.10 * fraction
-                case .bakingAtlas(let i, let t):
-                    let perAtlas = 0.80 / Double(max(t, 1))
-                    global = 0.15 + perAtlas * (Double(i - 1) + fraction)
-                case .finalizing:
-                    global = 0.95 + 0.05 * fraction
-                }
-                Task { @MainActor in
-                    self.bakeStatusLabel = label
-                    self.bakeStatusFraction = global
-                }
-            }
-
-            do {
-                let baked = try MeshAtlasBaker.bake(
-                    snapshots: snaps,
-                    candidateViews: candidates,
-                    onProgress: progress
-                )
-                await MainActor.run {
-                    self.bakedMesh = baked
-                    self.lastBakeStats = baked.stats
-                    self.isBaking = false
-                    self.bakeStatusFraction = 1.0
-                    self.showingExplorer = true
-                }
-            } catch {
-                await MainActor.run {
-                    self.bakeError = "Atlas bake failed: \(error)"
-                    self.isBaking = false
-                }
-            }
-        }
+        explorerSnapshots = snaps
+        showingExplorer = true
     }
 
     private func timeString(_ t: TimeInterval) -> String {
