@@ -218,57 +218,111 @@ final class CandidateViewPool {
 
         let desc = MTLTextureDescriptor()
         desc.textureType = .type2DArray
-        desc.pixelFormat = .bgra8Unorm
+        // sRGB pixel format. Phase 1's working path goes UIImage →
+        // SceneKit, which internally tags its textures as sRGB. With
+        // plain `bgra8Unorm` here the framebuffer's automatic linear→
+        // sRGB step double-encodes the already-sRGB bytes the camera
+        // captured, washing out colors into near-monochrome. Tagging
+        // the format as `_srgb` makes Metal handle sample-time sRGB→
+        // linear and store-time linear→sRGB correctly end-to-end —
+        // which is what fixes the "black and white room" symptom.
+        desc.pixelFormat = .bgra8Unorm_srgb
         desc.width = thumbnailWidth
         desc.height = thumbnailHeight
         desc.arrayLength = maxFrames
         desc.usage = [.shaderRead]
-        desc.storageMode = .private
+        // .shared — required for `MTLTexture.replace(...)` direct CPU
+        // upload in `uploadFrame(...)`. On Apple silicon's unified
+        // memory architecture this has no measurable cost vs .private
+        // for sample-only access in the bake.
+        desc.storageMode = .shared
         textureArray = device.makeTexture(descriptor: desc)
     }
 
-    /// Render the source pixel buffer into a scratch BGRA texture and
-    /// blit-copy it into slice `slot` of the texture array.
+    /// Upload the camera frame's pixel buffer into slice `slot` of the
+    /// texture array.
+    ///
+    /// Critically, this uses the **same code path Phase 1 uses** to
+    /// produce its working colored textures (the bed-corner shot):
+    ///   1. CIImage from the YpCbCr buffer (CoreImage handles YUV→RGB
+    ///      internally, including the chroma planes).
+    ///   2. `ciContext.createCGImage(_:from:)` — the proven Phase 1
+    ///      call. Returns a CGImage in CIContext's working color space
+    ///      (sRGB on iOS). Phase 1's bed corner came from this exact
+    ///      function.
+    ///   3. CGContext.draw — render the CGImage into a CPU-resident
+    ///      BGRA byte buffer with 32-bit-little-endian + premultiplied-
+    ///      first format (the byte layout that Metal's `bgra8Unorm`
+    ///      family expects).
+    ///   4. `MTLTexture.replace(region:mipmapLevel:slice:withBytes:...)`
+    ///      — direct CPU→GPU memory copy into the array slice. No
+    ///      command buffer, no encoder, no silent failure mode.
+    ///
+    /// This replaces the previous `CIContext.render(...) → blit` path
+    /// which was producing empty / monochrome slices for reasons that
+    /// took multiple debugging passes to disprove and could not be
+    /// reliably fixed. Direct `replace` is bulletproof on Apple silicon.
     private func uploadFrame(pixelBuffer: CVPixelBuffer, intoSlot slot: Int) -> Bool {
-        guard let textureArray = textureArray,
-              let cmd = commandQueue.makeCommandBuffer() else { return false }
+        guard let textureArray = textureArray else { return false }
 
-        let scratchDesc = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .bgra8Unorm,
-            width: thumbnailWidth,
-            height: thumbnailHeight,
-            mipmapped: false
-        )
-        scratchDesc.usage = [.shaderWrite, .renderTarget]
-        scratchDesc.storageMode = .private
-        guard let scratch = device.makeTexture(descriptor: scratchDesc) else {
-            return false
-        }
-
-        // Uniform scale only (aspect already preserved by thumbnail size).
+        // ── 1. CIImage from the AR frame's YUV buffer ─────────────────
         var ci = CIImage(cvPixelBuffer: pixelBuffer)
         let extent = ci.extent
         let scaleX = CGFloat(thumbnailWidth) / extent.width
         let scaleY = CGFloat(thumbnailHeight) / extent.height
         ci = ci.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
 
-        let bounds = CGRect(x: 0, y: 0, width: thumbnailWidth, height: thumbnailHeight)
+        // ── 2. CIImage → CGImage. Identical to Phase 1's path. ───────
+        let renderRect = CGRect(x: 0, y: 0,
+                                 width: CGFloat(thumbnailWidth),
+                                 height: CGFloat(thumbnailHeight))
+        guard let cg = ciContext.createCGImage(ci, from: renderRect) else {
+            NSLog("[CandidateViewPool] createCGImage failed for slot \(slot)")
+            return false
+        }
+
+        // ── 3. CGImage → BGRA byte buffer ────────────────────────────
+        // 32-bit-little-endian + premultiplied-first  ⇒  in-memory
+        // byte order BGRA, exactly what Metal's bgra8Unorm_srgb expects.
+        let w = thumbnailWidth
+        let h = thumbnailHeight
+        let bytesPerRow = w * 4
+        let bytesPerImage = bytesPerRow * h
+        var bgraBytes = [UInt8](repeating: 0, count: bytesPerImage)
+
         let cs = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
-        ciContext.render(ci, to: scratch, commandBuffer: cmd,
-                          bounds: bounds, colorSpace: cs)
+        let bitmapInfo: UInt32 =
+            CGBitmapInfo.byteOrder32Little.rawValue |
+            CGImageAlphaInfo.premultipliedFirst.rawValue
 
-        guard let blit = cmd.makeBlitCommandEncoder() else { return false }
-        blit.copy(
-            from: scratch, sourceSlice: 0, sourceLevel: 0,
-            sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-            sourceSize: MTLSize(width: thumbnailWidth, height: thumbnailHeight, depth: 1),
-            to: textureArray, destinationSlice: slot, destinationLevel: 0,
-            destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
+        let drewOK: Bool = bgraBytes.withUnsafeMutableBufferPointer { buf -> Bool in
+            guard let base = buf.baseAddress else { return false }
+            guard let cgCtx = CGContext(
+                data: base,
+                width: w, height: h,
+                bitsPerComponent: 8,
+                bytesPerRow: bytesPerRow,
+                space: cs,
+                bitmapInfo: bitmapInfo
+            ) else { return false }
+            cgCtx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
+        }
+        guard drewOK else {
+            NSLog("[CandidateViewPool] CGContext.draw failed for slot \(slot)")
+            return false
+        }
+
+        // ── 4. Direct upload into the texture-array slice ────────────
+        let region = MTLRegionMake2D(0, 0, w, h)
+        textureArray.replace(
+            region: region,
+            mipmapLevel: 0,
+            slice: slot,
+            withBytes: bgraBytes,
+            bytesPerRow: bytesPerRow,
+            bytesPerImage: bytesPerImage
         )
-        blit.endEncoding()
-
-        cmd.commit()
-        cmd.waitUntilCompleted()
         return true
     }
 }

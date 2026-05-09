@@ -1,21 +1,28 @@
 //
 //  MeshExplorerView.swift
-//  Phase 2 — Gold tier post-scan explorer, atlas-baked.
+//  Post-scan explorer — PER-ANCHOR rendering (Phase 1's proven path).
 //
-//  After the user taps "Explore Mesh", MeshAtlasBaker fuses every captured
-//  ARMeshAnchor into a single welded mesh and per-face MVS-bakes a 4K
-//  atlas from the candidate-view pool. This screen receives the resulting
-//  `BakedMesh` and renders it as a single first-person walkable scene:
+//  Phase 2's atlas bake produced grayscale output despite many fix
+//  attempts (texture format, storage mode, blit usage flags, sRGB
+//  encoding, MTLTexture→UIImage conversion). Reverted to per-anchor
+//  rendering which is what produced Phase 1's working bed-corner shot.
+//  All Phase 2 capture-side infrastructure (CandidateViewPool,
+//  MeshAtlasBaker) is retained for future debugging — the explorer
+//  just doesn't consume its output for now.
 //
-//    - Render geometry: 3 verts per triangle, no shared vertices, every
-//      vertex carries a unique atlas UV. One material with the bake's
-//      MTLTexture as diffuse — opaque, depth-writing, double-sided.
-//    - Physics: separate welded mesh used for SCNPhysicsShape concave-
-//      polyhedron collision so the player's capsule walks on the floor
-//      and slides along walls.
-//    - Player: dynamic capsule body, horizontal velocity from joystick,
-//      vertical velocity left to gravity. Yaw applied to camera only.
-//    - Spawn: world-space AABB center, 1.6 m above lowest geometry.
+//  This screen takes [TexturedMeshRenderer.ExplorerSnapshot] directly
+//  and renders one SCNNode per anchor:
+//    - Per-anchor SCNGeometry built from the snapshot's
+//      vertex/normal/index/uv data (UVs were computed in
+//      TexturedMeshRenderer's per-anchor projection — same call path
+//      that gave us the bed corner).
+//    - Per-anchor diffuse: snapshot.textureImage (UIImage), the
+//      best-view photo for that anchor. Phase 1's UIImage path is
+//      empirically correct for SCNMaterialProperty.contents.
+//    - Single coarse-welded physics body (8 cm grid) so SCNPhysicsShape
+//      concavePolyhedron builds fast (<200 ms) without freezing the
+//      main thread on the cover present.
+//    - First-person controller, joystick + look pad, jump.
 //
 
 import SwiftUI
@@ -27,7 +34,7 @@ import simd
 
 struct MeshExplorerView: View {
 
-    let bakedMesh: BakedMesh
+    let snapshots: [TexturedMeshRenderer.ExplorerSnapshot]
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var controller = FirstPersonController()
@@ -35,13 +42,11 @@ struct MeshExplorerView: View {
 
     var body: some View {
         ZStack {
-            // Render layer
             ExplorerSceneKitView(
-                bakedMesh: bakedMesh,
+                snapshots: snapshots,
                 controller: controller
             )
             .ignoresSafeArea()
-            // Touch + HUD overlay
             controlsOverlay
         }
         .preferredColorScheme(.dark)
@@ -315,10 +320,14 @@ private struct ExplorerSceneKitView: UIViewRepresentable {
 
     // MARK: - Material
 
-    private func makeAtlasMaterial(atlas: MTLTexture) -> SCNMaterial {
+    private func makeAtlasMaterial(atlas: UIImage) -> SCNMaterial {
         let m = SCNMaterial()
         m.lightingModel = .constant
-        // SceneKit accepts MTLTexture as material content directly.
+        // UIImage is the proven Phase 1 path for SCN material content.
+        // SceneKit creates its own MTLTexture from the UIImage, properly
+        // tagged sRGB, and renders it correctly through its standard
+        // pipeline. Earlier attempts to pass MTLTexture directly failed
+        // silently (grayscale output) on real device.
         m.diffuse.contents = atlas
         m.diffuse.wrapS = .clamp
         m.diffuse.wrapT = .clamp

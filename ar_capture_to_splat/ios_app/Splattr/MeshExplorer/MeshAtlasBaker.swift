@@ -46,6 +46,7 @@ import Foundation
 import Metal
 import SceneKit
 import simd
+import UIKit
 
 // MARK: - Public types
 
@@ -57,10 +58,12 @@ struct BakedChunk {
     let renderUVs: [SIMD2<Float>]
     /// Triangle count in THIS chunk only. Atlas covers exactly this many.
     let triangleCount: Int
-    /// 4K (or 2K for tiny scans) BGRA atlas. Diffuse for this chunk's
-    /// material. SceneKit consumes MTLTexture as material.contents
-    /// directly — no CGImage round-trip.
-    let atlas: MTLTexture
+    /// 4K (or 2K for tiny scans) BGRA atlas as a UIImage — the proven
+    /// Phase 1 rendering path through SceneKit. SCN officially accepts
+    /// MTLTexture too but in practice that path has multiple silent-
+    /// failure modes (including the grayscale bug we hit). UIImage is
+    /// the path that produced Phase 1's working bed-corner shot.
+    let atlas: UIImage
     let atlasSize: Int
 }
 
@@ -223,7 +226,7 @@ enum MeshAtlasBaker {
         let tBakeStart = CFAbsoluteTimeGetCurrent()
         for (atlasIdx, plan) in atlasPlans.enumerated() {
             let chunk = try bakeOneAtlas(
-                device: device,
+                pipelines: pipelines,
                 plan: plan,
                 triWorldV0: triWorldV0,
                 triWorldV1: triWorldV1,
@@ -386,7 +389,7 @@ enum MeshAtlasBaker {
     // MARK: - Single atlas bake
 
     private static func bakeOneAtlas(
-        device: MTLDevice,
+        pipelines: BakePipelines,
         plan: AtlasPlan,
         triWorldV0: [SIMD3<Float>],
         triWorldV1: [SIMD3<Float>],
@@ -398,6 +401,7 @@ enum MeshAtlasBaker {
         candidateViews: CandidateViewSnapshot,
         onProgress: (Double) -> Void
     ) throws -> BakedChunk {
+        let device = pipelines.device
         let atlasSize = plan.atlasSize
         let tileSize = plan.tileSize
         let tilesPerRow = plan.tilesPerRow
@@ -442,7 +446,7 @@ enum MeshAtlasBaker {
 
         // ── GPU bake (chunked) ─────────────────────────────────────────
         try bakeAtlasChunked(
-            device: device,
+            pipelines: pipelines,
             atlas: atlas,
             atlasSize: atlasSize,
             tileSize: tileSize,
@@ -456,26 +460,106 @@ enum MeshAtlasBaker {
             onProgress: onProgress
         )
 
+        // Atlas → UIImage. SceneKit's MTLTexture-as-material-content
+        // path has empirically failed for our bake (silent grayscale).
+        // The UIImage path is what Phase 1 already uses successfully
+        // (see TexturedMeshRenderer's `image` field flowing into the
+        // bed-corner shot). Read the .shared atlas bytes back, build a
+        // CGImage with explicit sRGB color space, wrap as UIImage.
+        guard let atlasImage = mtlTextureToUIImage(atlas) else {
+            throw MeshAtlasBakerError.textureAllocationFailed
+        }
+
         return BakedChunk(
             renderVertices: renderVertices,
             renderNormals: renderNormals,
             renderUVs: renderUVs,
             triangleCount: triCount,
-            atlas: atlas,
+            atlas: atlasImage,
             atlasSize: atlasSize
         )
     }
 
     // MARK: - Texture helper
 
+    /// Helper exposed for MeshExplorerView's per-anchor fallback render
+    /// path so it can build a single coarse-welded physics body without
+    /// running the full atlas bake.
+    ///
+    /// Welds at the given grid (default 8 cm — coarse enough that
+    /// SCNPhysicsShape concavePolyhedron builds in <200 ms instead of
+    /// freezing the main thread for 30+ seconds on a fine welded mesh).
+    static func makeCoarseWeldedMesh(
+        snapshots: [TexturedMeshRenderer.ExplorerSnapshot],
+        cellSize: Float = 0.08
+    ) -> (vertices: [SIMD3<Float>],
+          triangles: [SIMD3<UInt32>],
+          worldMin: SIMD3<Float>,
+          worldMax: SIMD3<Float>) {
+        let w = WeldedMesh.from(snapshots: snapshots, cellSize: cellSize)
+        return (w.vertices, w.triangles, w.worldMin, w.worldMax)
+    }
+
     private static func makeAtlasTexture(device: MTLDevice, size: Int) -> MTLTexture? {
+        // .shared so we can `getBytes` after the bake to convert the
+        // atlas to a UIImage and hand SCN the rendering path it actually
+        // works with reliably. On Apple silicon's unified memory .shared
+        // has no measurable cost vs .private for compute write/sample.
         let desc = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .bgra8Unorm,
+            pixelFormat: .bgra8Unorm_srgb,
             width: size, height: size, mipmapped: false
         )
         desc.usage = [.shaderRead, .shaderWrite]
-        desc.storageMode = .private
+        desc.storageMode = .shared
         return device.makeTexture(descriptor: desc)
+    }
+
+    /// Read a `.shared`-storage MTLTexture's bytes back to the CPU and
+    /// wrap them as a UIImage — the proven Phase-1 path for handing
+    /// SceneKit a colored material content. SceneKit officially accepts
+    /// MTLTexture as `SCNMaterialProperty.contents`, but in practice
+    /// MTLTexture-as-content has many silent-failure modes (wrong
+    /// format, wrong usage, wrong storage all produce blank or
+    /// monochrome output). UIImage is rock-solid: it's the path Phase 1
+    /// already uses for its working bed-corner shot.
+    ///
+    /// The atlas was written with `bgra8Unorm_srgb` format, so the
+    /// in-memory bytes are sRGB-encoded BGRA. We tell CGImage that
+    /// directly: byteOrder32Little + premultipliedFirst + sRGB color
+    /// space ⇒ the resulting UIImage round-trips through SceneKit
+    /// unchanged.
+    static func mtlTextureToUIImage(_ tex: MTLTexture) -> UIImage? {
+        let w = tex.width
+        let h = tex.height
+        let bytesPerRow = w * 4
+        let totalBytes = bytesPerRow * h
+        var bytes = [UInt8](repeating: 0, count: totalBytes)
+        let region = MTLRegionMake2D(0, 0, w, h)
+        tex.getBytes(&bytes,
+                      bytesPerRow: bytesPerRow,
+                      from: region,
+                      mipmapLevel: 0)
+
+        let cs = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo: UInt32 =
+            CGBitmapInfo.byteOrder32Little.rawValue |
+            CGImageAlphaInfo.premultipliedFirst.rawValue
+
+        guard let provider = CGDataProvider(
+            data: NSData(bytes: bytes, length: totalBytes)
+        ) else { return nil }
+        guard let cgImage = CGImage(
+            width: w, height: h,
+            bitsPerComponent: 8, bitsPerPixel: 32,
+            bytesPerRow: bytesPerRow,
+            space: cs,
+            bitmapInfo: CGBitmapInfo(rawValue: bitmapInfo),
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: false,
+            intent: .defaultIntent
+        ) else { return nil }
+        return UIImage(cgImage: cgImage)
     }
 }
 
@@ -697,7 +781,7 @@ struct BestViewParams {
 // well enough to texture it.
 kernel void selectBestView(
     device const float4*       triCentroid [[buffer(0)]],   // .xyz used
-    device const float4*       triNormal   [[buffer(1)]],   // .xyz used
+    device const float4*       triNormal   [[buffer(1)]],   // unused (kept for binding compat)
     device const ViewDataGPU*  views       [[buffer(2)]],
     device       ushort*       chosen      [[buffer(3)]],
     constant     BestViewParams& P         [[buffer(4)]],
@@ -705,9 +789,11 @@ kernel void selectBestView(
 ) {
     if (tid >= P.triangleCount) return;
     float3 c = triCentroid[tid].xyz;
-    float3 n = triNormal[tid].xyz;
 
-    float bestScore = 0.05;        // floor — anything below is "no view"
+    // FIX A: any valid view beats the sentinel. Removes the previous
+    // hard 0.05 floor that was rejecting borderline-but-textureable
+    // views and leaving most of the atlas as fallback grey.
+    float bestScore = -1.0;
     ushort bestIdx = 0xFFFF;
 
     for (uint v = 0; v < P.viewCount; v++) {
@@ -721,18 +807,29 @@ kernel void selectBestView(
         float ndcY = cl.y / cl.w;
         if (fabs(ndcX) > 0.95 || fabs(ndcY) > 0.95) continue;
 
-        // Facing.
-        float3 toCamRaw = V.cameraPosition.xyz - c;
-        float dist = length(toCamRaw);
+        float3 toCenRaw = c - V.cameraPosition.xyz;
+        float dist = length(toCenRaw);
         if (dist < 0.05) continue;
-        float3 toCam = toCamRaw / dist;
-        float facing = dot(n, toCam);
-        if (facing <= 0.10) continue;
+
+        // FIX B: geometric facing instead of normal-based. ARMeshAnchor
+        // triangles have inconsistent winding so triangle normals can
+        // point inward, making dot(normal, toCam) negative for valid
+        // views — that was the root cause of the all-grey atlas. The
+        // geometric test ("is the camera POINTED at this triangle?")
+        // is robust to winding and matches Phase 1's per-anchor scoring.
+        float3 dirToCen = toCenRaw / dist;
+        float facing = max(0.0, dot(V.cameraForward.xyz, dirToCen));
+        if (facing <= 0.05) continue;     // very loose — only excludes nearly perpendicular
 
         float distScore  = min(1.0, 1.5 / max(dist, 0.3));
-        float sharpScore = V.sharpness;
-        float score      = facing * distScore * sharpScore;
 
+        // FIX C: floor at 0.05 so a borderline-blurry frame doesn't
+        // zero the score multiplier and disqualify itself entirely.
+        // Ranking still favors sharper frames; this just keeps every
+        // valid frame in the running.
+        float sharpScore = max(0.05, V.sharpness);
+
+        float score = facing * distScore * sharpScore;
         if (score > bestScore) {
             bestScore = score;
             bestIdx   = (ushort)v;
@@ -829,6 +926,9 @@ private func selectBestViewsOnGPU(
     enc.endEncoding()
     cmd.commit()
     cmd.waitUntilCompleted()
+    if let err = cmd.error {
+        NSLog("[MeshAtlasBaker] selectBestView dispatch failed: \(err)")
+    }
 
     // Copy out the chosen indices.
     var chosen = [UInt16](repeating: .max, count: triangleCount)
@@ -1093,6 +1193,9 @@ private func bakeAtlasChunked(
         // compositor gets a slice of GPU time. Without this, a single
         // mega-dispatch holds the GPU and the phone visually freezes.
         cmd.waitUntilCompleted()
+        if let err = cmd.error {
+            NSLog("[MeshAtlasBaker] bakeAtlas sub-chunk \(subStart) failed: \(err)")
+        }
 
         subStart += subLen
         onProgress(Double(subStart) / Double(chunkTriangleCount))
