@@ -1,6 +1,6 @@
 //
 //  MeshExplorerView.swift
-//  Post-scan explorer — PER-ANCHOR rendering (Phase 1's proven path).
+//  Post-scan explorer — per-anchor rendering with top-K view blending.
 //
 //  Phase 2's atlas bake produced grayscale output despite many fix
 //  attempts (texture format, storage mode, blit usage flags, sRGB
@@ -11,14 +11,11 @@
 //  just doesn't consume its output for now.
 //
 //  This screen takes [TexturedMeshRenderer.ExplorerSnapshot] directly
-//  and renders one SCNNode per anchor:
-//    - Per-anchor SCNGeometry built from the snapshot's
-//      vertex/normal/index/uv data (UVs were computed in
-//      TexturedMeshRenderer's per-anchor projection — same call path
-//      that gave us the bed corner).
-//    - Per-anchor diffuse: snapshot.textureImage (UIImage), the
-//      best-view photo for that anchor. Phase 1's UIImage path is
-//      empirically correct for SCNMaterialProperty.contents.
+//  and renders one parent node per anchor:
+//    - Shared vertex/normal/index data for the anchor mesh.
+//    - Up to three stacked child nodes, each with its own UV projection
+//      and balanced UIImage texture, composited front-to-back using
+//      normalized view-quality weights.
 //    - Single coarse-welded physics body (8 cm grid) so SCNPhysicsShape
 //      concavePolyhedron builds fast (<200 ms) without freezing the
 //      main thread on the cover present.
@@ -35,6 +32,7 @@ import simd
 struct MeshExplorerView: View {
 
     let snapshots: [TexturedMeshRenderer.ExplorerSnapshot]
+    let preferredSpawnEyePosition: SIMD3<Float>?
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var controller = FirstPersonController()
@@ -44,6 +42,7 @@ struct MeshExplorerView: View {
         ZStack {
             ExplorerSceneKitView(
                 snapshots: snapshots,
+                preferredSpawnEyePosition: preferredSpawnEyePosition,
                 controller: controller
             )
             .ignoresSafeArea()
@@ -145,6 +144,7 @@ struct MeshExplorerView: View {
 
 private struct ExplorerSceneKitView: UIViewRepresentable {
     let snapshots: [TexturedMeshRenderer.ExplorerSnapshot]
+    let preferredSpawnEyePosition: SIMD3<Float>?
     let controller: FirstPersonController
 
     func makeUIView(context: Context) -> SCNView {
@@ -155,23 +155,18 @@ private struct ExplorerSceneKitView: UIViewRepresentable {
         v.allowsCameraControl = false
         v.autoenablesDefaultLighting = false
         v.rendersContinuously = true
-        let scene = buildScene()
+        let sceneBounds = computeSceneBounds()
+        let scene = buildScene(sceneBounds: sceneBounds)
         v.scene = scene
 
-        // World-space AABB across all snapshots — drives spawn point.
-        var wmin = SIMD3<Float>(.infinity, .infinity, .infinity)
-        var wmax = SIMD3<Float>(-.infinity, -.infinity, -.infinity)
-        for snap in snapshots {
-            wmin = simd_min(wmin, snap.worldMin)
-            wmax = simd_max(wmax, snap.worldMax)
-        }
-        if !wmin.x.isFinite {
-            wmin = SIMD3(-1, -1, -1); wmax = SIMD3(1, 1, 1)
-        }
         controller.attach(
             scene: scene,
             sceneView: v,
-            sceneBounds: SceneBoundsDescriptor(minBound: wmin, maxBound: wmax)
+            spawnDescriptor: SceneSpawnDescriptor(
+                minBound: sceneBounds.minBound,
+                maxBound: sceneBounds.maxBound,
+                preferredEyePosition: preferredSpawnEyePosition
+            )
         )
         return v
     }
@@ -181,24 +176,50 @@ private struct ExplorerSceneKitView: UIViewRepresentable {
     }
 
     /// Build the SCNScene from per-anchor snapshots:
-    ///   - One render node per anchor — its own SCNGeometry from the
-    ///     anchor's deep-copied mesh data, its own UIImage texture
-    ///     (the per-anchor best-view photo). Phase 1's working path.
+    ///   - One parent node per anchor — shared deep-copied mesh data plus
+    ///     up to three layered child nodes, each with its own UV projection
+    ///     and retained camera photo.
     ///   - One hidden physics node — single SCNPhysicsShape concave-
     ///     polyhedron over a coarse-welded (8 cm) mesh. Single body
     ///     spans the whole room; coarse welding keeps construction
     ///     fast (<200 ms vs 30+ s on the fine mesh).
     ///   - Soft ambient. `.constant` lighting on materials so the
     ///     baked photo colors come through unmodified.
-    private func buildScene() -> SCNScene {
+    private func buildScene(sceneBounds: SceneBoundsDescriptor) -> SCNScene {
         let scene = SCNScene()
         scene.physicsWorld.gravity = SCNVector3(0, -9.81, 0)
         scene.physicsWorld.timeStep = 1.0 / 90.0
 
-        // ── Render: one SCNNode per anchor ─────────────────────────────
-        for snap in snapshots {
+        // ── Option A + G4: GLOBAL COLOR BALANCE ───────────────────────
+        //
+        // Each anchor layer was textured with one retained camera view, taken
+        // under whatever ARKit auto-exposure / auto-white-balance was
+        // doing AT THAT MOMENT. Adjacent anchors disagree on lighting,
+        // producing visible chunk seams. AnchorColorBalance computes a
+        // per-anchor RGB gain that pulls each anchor's mean toward a
+        // global per-channel median — eliminating most of the seam-jump
+        // before SCN ever sees the textures.
+        //
+        // This is the cheap quick-win step from Waechter §4.1 / Lempitsky
+        // & Ivanov 2007. Doesn't replace a full MVS-Texturing pipeline
+        // but addresses the most visible Phase-1 artifact.
+        let balancedTextures = AnchorColorBalance.balanceBlendTextures(
+            snapshots: snapshots
+        )
+
+        // ── Render: one node per anchor, blending up to three views ─────
+        for (i, snap) in snapshots.enumerated() {
+            let blendViews = snap.blendViews
+            guard !blendViews.isEmpty else { continue }
+            let layerTextures = i < balancedTextures.count ? balancedTextures[i] : []
             guard let geom = makeAnchorGeometry(from: snap) else { continue }
-            geom.materials = [makeAnchorMaterial(image: snap.textureImage)]
+            let textures = (0..<3).map { layerIndex in
+                layerIndex < layerTextures.count
+                    ? layerTextures[layerIndex]
+                    : (layerIndex < blendViews.count ? blendViews[layerIndex].textureImage : Self.blankBlendImage)
+            }
+            let weights = normalizedBlendWeights(for: blendViews.map(\.qualityScore))
+            geom.materials = [makeAnchorMaterial(images: textures, weights: weights)]
             let node = SCNNode(geometry: geom)
             node.simdTransform = snap.worldTransform
             node.castsShadow = false
@@ -228,6 +249,8 @@ private struct ExplorerSceneKitView: UIViewRepresentable {
             scene.rootNode.addChildNode(physNode)
         }
 
+        addContainmentShell(to: scene, sceneBounds: sceneBounds)
+
         // ── Lighting ────────────────────────────────────────────────────
         let amb = SCNNode()
         amb.light = SCNLight()
@@ -237,6 +260,87 @@ private struct ExplorerSceneKitView: UIViewRepresentable {
         scene.rootNode.addChildNode(amb)
 
         return scene
+    }
+
+    private func computeSceneBounds() -> SceneBoundsDescriptor {
+        var wmin = SIMD3<Float>(.infinity, .infinity, .infinity)
+        var wmax = SIMD3<Float>(-.infinity, -.infinity, -.infinity)
+        for snap in snapshots {
+            wmin = simd_min(wmin, snap.worldMin)
+            wmax = simd_max(wmax, snap.worldMax)
+        }
+        if !wmin.x.isFinite {
+            wmin = SIMD3(-1, -1, -1)
+            wmax = SIMD3(1, 1, 1)
+        }
+        return SceneBoundsDescriptor(minBound: wmin, maxBound: wmax)
+    }
+
+    private func addContainmentShell(to scene: SCNScene, sceneBounds: SceneBoundsDescriptor) {
+        let wallThickness: Float = 0.10
+        let floorThickness: Float = 0.20
+        let ceilingThickness: Float = 0.10
+        let horizontalPadding: Float = 0.75
+        let floorOffset: Float = 0.15
+        let ceilingOffset: Float = 1.00
+
+        let minX = sceneBounds.minBound.x - horizontalPadding
+        let maxX = sceneBounds.maxBound.x + horizontalPadding
+        let minZ = sceneBounds.minBound.z - horizontalPadding
+        let maxZ = sceneBounds.maxBound.z + horizontalPadding
+        let floorY = sceneBounds.minBound.y - floorOffset
+        let ceilingY = sceneBounds.maxBound.y + ceilingOffset
+
+        let shellWidth = max(0.5, maxX - minX)
+        let shellDepth = max(0.5, maxZ - minZ)
+        let shellHeight = max(2.0, ceilingY - floorY)
+        let midX = (minX + maxX) * 0.5
+        let midZ = (minZ + maxZ) * 0.5
+        let midY = (floorY + ceilingY) * 0.5
+
+        let colliders: [(size: SIMD3<Float>, center: SIMD3<Float>)] = [
+            (
+                SIMD3(shellWidth, floorThickness, shellDepth),
+                SIMD3(midX, floorY - (floorThickness * 0.5), midZ)
+            ),
+            (
+                SIMD3(shellWidth, ceilingThickness, shellDepth),
+                SIMD3(midX, ceilingY + (ceilingThickness * 0.5), midZ)
+            ),
+            (
+                SIMD3(wallThickness, shellHeight, shellDepth),
+                SIMD3(minX - (wallThickness * 0.5), midY, midZ)
+            ),
+            (
+                SIMD3(wallThickness, shellHeight, shellDepth),
+                SIMD3(maxX + (wallThickness * 0.5), midY, midZ)
+            ),
+            (
+                SIMD3(shellWidth, shellHeight, wallThickness),
+                SIMD3(midX, midY, minZ - (wallThickness * 0.5))
+            ),
+            (
+                SIMD3(shellWidth, shellHeight, wallThickness),
+                SIMD3(midX, midY, maxZ + (wallThickness * 0.5))
+            )
+        ]
+
+        for collider in colliders {
+            let geom = SCNBox(
+                width: CGFloat(collider.size.x),
+                height: CGFloat(collider.size.y),
+                length: CGFloat(collider.size.z),
+                chamferRadius: 0
+            )
+            let node = SCNNode(geometry: geom)
+            node.simdPosition = collider.center
+            node.opacity = 0.0
+            node.castsShadow = false
+            node.physicsBody = SCNPhysicsBody(type: .static, shape: nil)
+            node.physicsBody?.friction = 0.6
+            node.physicsBody?.restitution = 0.0
+            scene.rootNode.addChildNode(node)
+        }
     }
 
     // MARK: - Geometry construction
@@ -267,13 +371,18 @@ private struct ExplorerSceneKitView: UIViewRepresentable {
                 dataOffset: 0, dataStride: MemoryLayout<SIMD3<Float>>.size
             ))
         }
-        sources.append(SCNGeometrySource(
-            data: snap.uvData, semantic: .texcoord,
-            vectorCount: snap.vertexCount, usesFloatComponents: true,
-            componentsPerVector: 2,
-            bytesPerComponent: MemoryLayout<Float>.size,
-            dataOffset: 0, dataStride: MemoryLayout<SIMD2<Float>>.size
-        ))
+        for layerIndex in 0..<3 {
+            let uvData = layerIndex < snap.blendViews.count
+                ? snap.blendViews[layerIndex].uvData
+                : Self.blankUVData(vertexCount: snap.vertexCount)
+            sources.append(SCNGeometrySource(
+                data: uvData, semantic: .texcoord,
+                vectorCount: snap.vertexCount, usesFloatComponents: true,
+                componentsPerVector: 2,
+                bytesPerComponent: MemoryLayout<Float>.size,
+                dataOffset: 0, dataStride: MemoryLayout<SIMD2<Float>>.size
+            ))
+        }
 
         let element = SCNGeometryElement(
             data: snap.indexData,
@@ -310,35 +419,93 @@ private struct ExplorerSceneKitView: UIViewRepresentable {
 
     // MARK: - Material
 
-    /// Phase 1's PROVEN material: UIImage diffuse with a fragment shader
-    /// modifier that replaces out-of-[0.005, 0.995] UVs with neutral
-    /// grey. UVs come from the snapshot's per-anchor projection — most
-    /// land inside [0, 1], some sliver fragments fall outside and would
-    /// otherwise sample edge pixels (smearing). The shader catches them.
-    private func makeAnchorMaterial(image: UIImage) -> SCNMaterial {
+    private func makeAnchorMaterial(
+        images: [UIImage],
+        weights: SIMD3<Float>
+    ) -> SCNMaterial {
         let m = SCNMaterial()
         m.lightingModel = .constant
-        m.diffuse.contents = image
+        m.diffuse.contents = images[0]
         m.diffuse.wrapS = .clamp
         m.diffuse.wrapT = .clamp
         m.diffuse.minificationFilter = .linear
         m.diffuse.magnificationFilter = .linear
+        m.diffuse.mappingChannel = 0
+        m.emission.contents = images[1]
+        m.emission.wrapS = .clamp
+        m.emission.wrapT = .clamp
+        m.emission.mappingChannel = 1
+        m.ambient.contents = images[2]
+        m.ambient.wrapS = .clamp
+        m.ambient.wrapT = .clamp
+        m.ambient.mappingChannel = 2
+        m.setValue(SCNVector3(weights.x, weights.y, weights.z), forKey: "blendWeights")
         m.transparency = 1.0
         m.isDoubleSided = true
         m.writesToDepthBuffer = true
         m.readsFromDepthBuffer = true
         m.shaderModifiers = [
             .fragment: """
+            uniform vec3 blendWeights;
             #pragma transparent
-            float2 _scc_uv = _surface.diffuseTexcoord;
-            if (_scc_uv.x < 0.005 || _scc_uv.x > 0.995 ||
-                _scc_uv.y < 0.005 || _scc_uv.y > 0.995) {
-                _output.color = float4(0.45, 0.45, 0.50, 1.0);
+            vec4 accum = vec4(0.0);
+            float total = 0.0;
+
+            float2 uv0 = _surface.diffuseTexcoord;
+            if (blendWeights.x > 0.0 &&
+                uv0.x >= 0.005 && uv0.x <= 0.995 &&
+                uv0.y >= 0.005 && uv0.y <= 0.995) {
+                accum += texture2D(u_diffuseTexture, uv0) * blendWeights.x;
+                total += blendWeights.x;
+            }
+
+            float2 uv1 = _surface.emissionTexcoord;
+            if (blendWeights.y > 0.0 &&
+                uv1.x >= 0.005 && uv1.x <= 0.995 &&
+                uv1.y >= 0.005 && uv1.y <= 0.995) {
+                accum += texture2D(u_emissionTexture, uv1) * blendWeights.y;
+                total += blendWeights.y;
+            }
+
+            float2 uv2 = _surface.ambientTexcoord;
+            if (blendWeights.z > 0.0 &&
+                uv2.x >= 0.005 && uv2.x <= 0.995 &&
+                uv2.y >= 0.005 && uv2.y <= 0.995) {
+                accum += texture2D(u_ambientTexture, uv2) * blendWeights.z;
+                total += blendWeights.z;
+            }
+
+            if (total > 0.0001) {
+                vec4 blended = accum / total;
+                _output.color = vec4(blended.rgb, 1.0);
+            } else {
+                _output.color = vec4(0.45, 0.45, 0.50, 1.0);
             }
             """
         ]
         return m
     }
+
+    private func normalizedBlendWeights(for rawWeights: [Float]) -> SIMD3<Float> {
+        let padded = (0..<3).map { $0 < rawWeights.count ? max(0, rawWeights[$0]) : 0 }
+        let total = padded.reduce(0, +)
+        guard total > 0 else { return SIMD3<Float>(1, 0, 0) }
+        return SIMD3<Float>(padded[0] / total, padded[1] / total, padded[2] / total)
+    }
+
+    private static func blankUVData(vertexCount: Int) -> Data {
+        let sentinel = SIMD2<Float>(-1, -1)
+        let uvs = Array(repeating: sentinel, count: vertexCount)
+        return uvs.withUnsafeBufferPointer { Data(buffer: $0) }
+    }
+
+    private static let blankBlendImage: UIImage = {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 1, height: 1))
+        return renderer.image { ctx in
+            UIColor.black.setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: 1, height: 1))
+        }
+    }()
 }
 
 // ── First-person controller ──────────────────────────────────────────────────
@@ -396,7 +563,7 @@ final class FirstPersonController: ObservableObject {
         playerNode.addChildNode(cameraNode)
     }
 
-    func attach(scene: SCNScene, sceneView: SCNView, sceneBounds: SceneBoundsDescriptor) {
+    func attach(scene: SCNScene, sceneView: SCNView, spawnDescriptor: SceneSpawnDescriptor) {
         self.sceneView = sceneView
         scene.rootNode.addChildNode(playerNode)
 
@@ -406,8 +573,20 @@ final class FirstPersonController: ObservableObject {
         // Otherwise SCNView renders frame zero with the player still at
         // origin (often outside the captured AABB → camera pointing at
         // empty space → black).
-        let center = (sceneBounds.minBound + sceneBounds.maxBound) * 0.5
-        let spawn = SIMD3<Float>(center.x, sceneBounds.minBound.y + 1.6, center.z)
+        let center = (spawnDescriptor.minBound + spawnDescriptor.maxBound) * 0.5
+        let eyeOffsetY = cameraNode.simdPosition.y
+        let minEyeY = spawnDescriptor.minBound.y + 1.6
+        var eyePosition = spawnDescriptor.preferredEyePosition ?? center
+        if !eyePosition.x.isFinite { eyePosition.x = center.x }
+        if !eyePosition.z.isFinite { eyePosition.z = center.z }
+        if !eyePosition.y.isFinite || eyePosition.y < minEyeY {
+            eyePosition.y = minEyeY
+        }
+        let spawn = SIMD3<Float>(
+            eyePosition.x,
+            eyePosition.y - eyeOffsetY,
+            eyePosition.z
+        )
         playerNode.simdPosition = spawn
         playerNode.physicsBody?.velocity = SCNVector3(0, 0, 0)
 
@@ -505,11 +684,18 @@ final class FirstPersonController: ObservableObject {
     }
 }
 
-/// World-space AABB of the captured mesh snapshots. Drives where we spawn
-/// the player so they never start inside a wall or below the floor.
+/// World-space AABB of the captured mesh snapshots.
 struct SceneBoundsDescriptor {
     let minBound: SIMD3<Float>
     let maxBound: SIMD3<Float>
+}
+
+/// Explorer spawn inputs: room bounds plus the preferred recording-start
+/// eye position captured from the first observed AR frame.
+struct SceneSpawnDescriptor {
+    let minBound: SIMD3<Float>
+    let maxBound: SIMD3<Float>
+    let preferredEyePosition: SIMD3<Float>?
 }
 
 // ── Virtual joystick ─────────────────────────────────────────────────────────

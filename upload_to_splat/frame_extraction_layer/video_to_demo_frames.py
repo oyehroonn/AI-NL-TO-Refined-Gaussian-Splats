@@ -63,7 +63,12 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
 def probe_video(video_path: Path) -> tuple[float, float | None, int | None]:
     """
     Returns (duration_seconds, avg_frame_rate or None, nb_read_frames or None).
-    nb_read_frames may be missing for some codecs/containers.
+    Frame count metadata may be missing for some codecs/containers.
+
+    Keep this probe lightweight: `ffprobe -count_frames` can force a full
+    decode scan on long or highly compressed videos, which makes Layer 1
+    appear hung before extraction even begins. We rely on container metadata
+    when available and fall back to duration * fps estimation otherwise.
     """
     out = _run(
         [
@@ -72,9 +77,8 @@ def probe_video(video_path: Path) -> tuple[float, float | None, int | None]:
             "error",
             "-select_streams",
             "v:0",
-            "-count_frames",
             "-show_entries",
-            "stream=duration,avg_frame_rate,r_frame_rate,nb_read_frames",
+            "stream=duration,avg_frame_rate,r_frame_rate,nb_frames",
             "-of",
             "json",
             str(video_path),
@@ -101,7 +105,7 @@ def probe_video(video_path: Path) -> tuple[float, float | None, int | None]:
 
     fps = parse_rate(s.get("avg_frame_rate")) or parse_rate(s.get("r_frame_rate"))
 
-    nb = s.get("nb_read_frames")
+    nb = s.get("nb_frames")
     if nb in (None, "N/A"):
         nb_frames = None
     else:

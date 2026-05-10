@@ -38,6 +38,9 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
     }
 
     @Published private(set) var anchorCount: Int = 0
+    @Published private(set) var surfaceCoverage = SurfaceCoverageSummary()
+    @Published private(set) var weakAreaHint: WeakAreaHint?
+    @Published private(set) var explorerReadiness = ExplorerReadiness()
 
     /// Caller (CaptureView) attaches the running ARSession so we can pull
     /// the latest captured image + camera matrices in `willRenderScene`.
@@ -52,8 +55,13 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         trackedNodes.removeAll()
         anchorsByID.removeAll()
         snapshotsByAnchor.removeAll()
+        anchorCoverageByID.removeAll()
         anchorCentroidByID.removeAll()
+        anchorBoundsByID.removeAll()
         anchorCount = 0
+        surfaceCoverage = SurfaceCoverageSummary()
+        weakAreaHint = nil
+        explorerReadiness = ExplorerReadiness()
         latestSnapshot = nil
     }
 
@@ -61,10 +69,11 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
     /// ~250 MB for a typical room) without touching geometry, the anchor
     /// dictionary, or the live SCN nodes.
     ///
-    /// CaptureView calls this after taking ExplorerSnapshots and before
-    /// kicking off the atlas bake — the bake's own temporaries already
-    /// own everything they need, and holding a duplicate copy in memory
-    /// during the bake is exactly what jetsam-kills the app.
+    /// Currently retained for future memory-pressure handling. The G1
+    /// explorer flow intentionally does NOT call this on Explore entry,
+    /// because dropping the per-anchor candidate snapshots causes the
+    /// next explore cycle to temporarily lose color until ARKit repopulates
+    /// the buffers.
     ///
     /// Live overlay rebuilds itself naturally on the next willRenderScene
     /// + didUpdate cycle (typically <2 s). The user does not see a black
@@ -85,6 +94,15 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
     /// shared geometry. Owning the bytes guarantees the explorer scene can
     /// stay valid even while the AR session continues underneath.
     struct ExplorerSnapshot {
+        struct BlendView {
+            /// Per-vertex UVs (SIMD2<Float>) baked from one ranked camera view.
+            let uvData: Data
+            /// The source photo for this view, later color-balanced in the explorer.
+            let textureImage: UIImage
+            /// Raw quality weight for top-K blending. Higher = more trusted.
+            let qualityScore: Float
+        }
+
         let worldTransform: simd_float4x4
         /// Tightly-packed SIMD3<Float> vertex positions in anchor-local space.
         let vertexData: Data
@@ -96,13 +114,61 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         let indexData: Data
         let triangleCount: Int
         let bytesPerIndex: Int
-        /// Per-vertex UVs (SIMD2<Float>) baked from the frozen camera snapshot.
-        let uvData: Data
         /// World-space AABB of the vertices after applying worldTransform.
         let worldMin: SIMD3<Float>
         let worldMax: SIMD3<Float>
-        /// The first-sighting RGB photo to drape on this anchor.
-        let textureImage: UIImage
+        /// Ranked per-anchor views used by the explorer's top-K blend path.
+        let blendViews: [BlendView]
+    }
+
+    struct SurfaceCoverageSummary: Equatable {
+        var wallFraction: Double = 0
+        var floorFraction: Double = 0
+        var ceilingFraction: Double = 0
+        var wallCount: Int = 0
+        var floorCount: Int = 0
+        var ceilingCount: Int = 0
+
+        var hasAnyData: Bool {
+            wallCount > 0 || floorCount > 0 || ceilingCount > 0
+        }
+    }
+
+    struct WeakAreaHint: Equatable {
+        let label: String
+        let normalizedX: CGFloat
+        let normalizedY: CGFloat
+        let isOnScreen: Bool
+        let horizontalDirection: Int
+        let verticalDirection: Int
+        let dwellProgress: CGFloat
+    }
+
+    struct ExplorerReadiness: Equatable {
+        static let requiredTexturedAnchorCount: Int = 10
+        static let minimumCapturedVolumeCubicMeters: Float = 1.0
+
+        var texturedAnchorCount: Int = 0
+        var capturedVolumeCubicMeters: Float = 0
+
+        var hasEnoughTexturedAnchors: Bool {
+            texturedAnchorCount >= Self.requiredTexturedAnchorCount
+        }
+
+        var hasEnoughCapturedVolume: Bool {
+            capturedVolumeCubicMeters >= Self.minimumCapturedVolumeCubicMeters
+        }
+
+        var isReady: Bool {
+            hasEnoughTexturedAnchors && hasEnoughCapturedVolume
+        }
+    }
+
+    struct RoomPlanObjectCoverage: Identifiable, Equatable {
+        let id: UUID
+        let label: String
+        let coverageScore: Float
+        let needsMoreCoverage: Bool
     }
 
     /// Snapshot of every currently-textured anchor for hand-off to the
@@ -110,28 +176,34 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
     /// every byte into freshly-allocated `Data` so the resulting array is
     /// fully independent of ARKit's live state.
     ///
-    /// Uses the best-scoring snapshot from each anchor's ring buffer (the
-    /// camera view that was actually pointed at the anchor, sharply, from
-    /// a reasonable distance) — NOT the first-sighting snapshot, which is
-    /// what produced the long horizontal smears in the legacy renderer.
-    func snapshotForExplorer() -> [ExplorerSnapshot] {
+    /// Uses up to the top three scoring views per anchor. When the capture
+    /// coordinator hands us a paused CandidateViewPool snapshot we rank
+    /// those accepted-frame views first; otherwise we fall back to this
+    /// renderer's live per-anchor ring buffer.
+    func snapshotForExplorer(candidateViews: CandidateViewSnapshot? = nil) -> [ExplorerSnapshot] {
         var out: [ExplorerSnapshot] = []
         out.reserveCapacity(trackedNodes.count)
         for (id, anchor) in anchorsByID {
-            guard let snap = bestSnapshot(forAnchorID: id) else { continue }
-            guard let owned = ownGeometryFromAnchor(anchor: anchor, snapshot: snap) else { continue }
+            if let candidateViews,
+               let owned = ownGeometryFromAnchor(anchor: anchor, candidateViews: candidateViews) {
+                out.append(owned)
+                continue
+            }
+            let ranked = topSnapshots(forAnchorID: id, limit: 3)
+            guard !ranked.isEmpty else { continue }
+            guard let owned = ownGeometryFromAnchor(anchor: anchor, rankedSnapshots: ranked) else { continue }
             out.append(owned)
         }
         return out
     }
 
     /// Read the ARMeshAnchor's raw geometry buffers directly, copy bytes
-    /// into freshly-allocated `Data`, recompute UVs from the frozen camera
-    /// matrices, and bundle the texture UIImage. The resulting snapshot
-    /// shares no Metal buffer with ARKit.
+    /// into freshly-allocated `Data`, recompute UVs for each retained
+    /// ranked camera view, and bundle the explorer blend layers. The
+    /// resulting snapshot shares no Metal buffer with ARKit.
     private func ownGeometryFromAnchor(
         anchor: ARMeshAnchor,
-        snapshot: CameraSnapshot
+        rankedSnapshots: [ScoredSnapshot]
     ) -> ExplorerSnapshot? {
         let g = anchor.geometry
         let vertexCount = g.vertices.count
@@ -173,28 +245,23 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
             normalCount = vertexCount
         }
 
-        // ── UVs from the chosen best-view snapshot ─────────────────────
-        // Same sentinel rule as makeTexturedGeometry: vertices that don't
-        // project cleanly into the snapshot's [0.05, 0.95] inset get UV
-        // (-1, -1), and the explorer's fragment shader replaces them with
-        // neutral grey. Without this the texture's edge pixels would smear
-        // across walls in the explorer view.
-        let viewProj = simd_mul(snapshot.projectionMatrix, snapshot.viewMatrix)
-        let sentinel = SIMD2<Float>(-1, -1)
-        var uvs = [SIMD2<Float>](repeating: sentinel, count: vertexCount)
-        for i in 0..<vertexCount {
-            let p = verts[i]
-            let world = simd_mul(xform, SIMD4<Float>(p.x, p.y, p.z, 1))
-            let clip = simd_mul(viewProj, world)
-            if clip.w <= 0 { continue }
-            let ndcX = clip.x / clip.w
-            let ndcY = clip.y / clip.w
-            let u: Float = Float((ndcX * 0.5) + 0.5)
-            let v: Float = Float(1.0 - ((ndcY * 0.5) + 0.5))
-            if u < 0.05 || u > 0.95 || v < 0.05 || v > 0.95 { continue }
-            uvs[i] = SIMD2(u, v)
+        let blendViews = rankedSnapshots.compactMap { scored -> ExplorerSnapshot.BlendView? in
+            let projected = projectUVData(
+                vertices: verts,
+                worldTransform: xform,
+                snapshot: scored.snapshot
+            )
+            guard projected.validVertexCount > 0 else { return nil }
+            // Visibility/in-frustum validity should affect the layer's trust,
+            // not just the raw view-angle and sharpness score.
+            let visibility = Float(projected.validVertexCount) / Float(max(1, vertexCount))
+            return ExplorerSnapshot.BlendView(
+                uvData: projected.uvData,
+                textureImage: scored.snapshot.image,
+                qualityScore: max(0.0001, scored.score * visibility)
+            )
         }
-        let uvData = uvs.withUnsafeBufferPointer { Data(buffer: $0) }
+        guard !blendViews.isEmpty else { return nil }
 
         // ── Triangle indices: copy directly from the MTLBuffer ──────────
         let triangleCount = g.faces.count
@@ -213,11 +280,131 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
             indexData: indexData,
             triangleCount: triangleCount,
             bytesPerIndex: bytesPerIndex,
-            uvData: uvData,
             worldMin: wmin,
             worldMax: wmax,
-            textureImage: snapshot.image
+            blendViews: blendViews
         )
+    }
+
+    private func ownGeometryFromAnchor(
+        anchor: ARMeshAnchor,
+        candidateViews: CandidateViewSnapshot
+    ) -> ExplorerSnapshot? {
+        let g = anchor.geometry
+        let vertexCount = g.vertices.count
+        guard vertexCount > 0 else { return nil }
+        let xform = anchor.transform
+
+        var verts = [SIMD3<Float>](repeating: .zero, count: vertexCount)
+        let vBase = g.vertices.buffer.contents().advanced(by: g.vertices.offset)
+        for i in 0..<vertexCount {
+            let p = vBase.advanced(by: i * g.vertices.stride)
+                .assumingMemoryBound(to: SIMD3<Float>.self).pointee
+            verts[i] = p
+        }
+        let vertexData = verts.withUnsafeBufferPointer { Data(buffer: $0) }
+
+        var wmin = SIMD3<Float>( .infinity,  .infinity,  .infinity)
+        var wmax = SIMD3<Float>(-.infinity, -.infinity, -.infinity)
+        for v in verts {
+            let w4 = simd_mul(xform, SIMD4<Float>(v.x, v.y, v.z, 1))
+            let w = SIMD3<Float>(w4.x, w4.y, w4.z)
+            wmin = simd_min(wmin, w)
+            wmax = simd_max(wmax, w)
+        }
+
+        var normalData = Data()
+        var normalCount = 0
+        if g.normals.count == vertexCount {
+            var normals = [SIMD3<Float>](repeating: .zero, count: vertexCount)
+            let nBase = g.normals.buffer.contents().advanced(by: g.normals.offset)
+            for i in 0..<vertexCount {
+                let p = nBase.advanced(by: i * g.normals.stride)
+                    .assumingMemoryBound(to: SIMD3<Float>.self).pointee
+                normals[i] = p
+            }
+            normalData = normals.withUnsafeBufferPointer { Data(buffer: $0) }
+            normalCount = vertexCount
+        }
+
+        let centroid = anchorCentroidByID[anchor.identifier] ?? computeCentroid(for: anchor)
+        let rankedViews = topCandidateViews(
+            anchorTransform: xform,
+            anchorCentroid: centroid,
+            vertices: verts,
+            candidateViews: candidateViews,
+            limit: 3
+        )
+        let blendViews = rankedViews.compactMap { ranked -> ExplorerSnapshot.BlendView? in
+            guard let image = candidateViews.image(for: ranked.frame) else { return nil }
+            return ExplorerSnapshot.BlendView(
+                uvData: ranked.uvData,
+                textureImage: image,
+                qualityScore: ranked.qualityScore
+            )
+        }
+        guard !blendViews.isEmpty else { return nil }
+
+        let triangleCount = g.faces.count
+        guard triangleCount > 0 else { return nil }
+        let bytesPerIndex = g.faces.bytesPerIndex
+        let totalIndexBytes = triangleCount * 3 * bytesPerIndex
+        let iBase = g.faces.buffer.contents()
+        let indexData = Data(bytes: iBase, count: totalIndexBytes)
+
+        return ExplorerSnapshot(
+            worldTransform: xform,
+            vertexData: vertexData,
+            vertexCount: vertexCount,
+            normalData: normalData,
+            normalCount: normalCount,
+            indexData: indexData,
+            triangleCount: triangleCount,
+            bytesPerIndex: bytesPerIndex,
+            worldMin: wmin,
+            worldMax: wmax,
+            blendViews: blendViews
+        )
+    }
+
+    private func projectUVData(
+        vertices: [SIMD3<Float>],
+        worldTransform: simd_float4x4,
+        snapshot: CameraSnapshot
+    ) -> (uvData: Data, validVertexCount: Int) {
+        projectUVData(
+            vertices: vertices,
+            worldTransform: worldTransform,
+            viewMatrix: snapshot.viewMatrix,
+            projectionMatrix: snapshot.projectionMatrix
+        )
+    }
+
+    private func projectUVData(
+        vertices: [SIMD3<Float>],
+        worldTransform: simd_float4x4,
+        viewMatrix: simd_float4x4,
+        projectionMatrix: simd_float4x4
+    ) -> (uvData: Data, validVertexCount: Int) {
+        let viewProj = simd_mul(projectionMatrix, viewMatrix)
+        let sentinel = SIMD2<Float>(-1, -1)
+        var validVertexCount = 0
+        var uvs = [SIMD2<Float>](repeating: sentinel, count: vertices.count)
+        for i in 0..<vertices.count {
+            let p = vertices[i]
+            let world = simd_mul(worldTransform, SIMD4<Float>(p.x, p.y, p.z, 1))
+            let clip = simd_mul(viewProj, world)
+            if clip.w <= 0 { continue }
+            let ndcX = clip.x / clip.w
+            let ndcY = clip.y / clip.w
+            let u: Float = Float((ndcX * 0.5) + 0.5)
+            let v: Float = Float(1.0 - ((ndcY * 0.5) + 0.5))
+            if u < 0.05 || u > 0.95 || v < 0.05 || v > 0.95 { continue }
+            uvs[i] = SIMD2(u, v)
+            validVertexCount += 1
+        }
+        let uvData = uvs.withUnsafeBufferPointer { Data(buffer: $0) }
+        return (uvData, validVertexCount)
     }
 
     // MARK: - Internal state
@@ -230,6 +417,11 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
     /// which is empty for MTLBuffer-based sources.
     private var anchorsByID: [UUID: ARMeshAnchor] = [:]
     private var latestSnapshot: CameraSnapshot?
+    private var anchorCoverageByID: [UUID: AnchorCoverageState] = [:]
+    private var anchorBoundsByID: [UUID: (min: SIMD3<Float>, max: SIMD3<Float>)] = [:]
+    private var activeWeakTargetID: UUID?
+    private var activeWeakTargetLockedAt: TimeInterval = 0
+    private var activeWeakTargetVisibleSince: TimeInterval?
     /// Per-anchor ring buffer of best-scoring candidate snapshots. Each
     /// anchor keeps up to `maxSnapshotsPerAnchor` photos, ranked by
     /// `score(snapshot, anchor)`. The renderer always bakes the
@@ -251,6 +443,8 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
     /// Texture target side length. 512 is plenty for the hand-held overlay
     /// and keeps GPU memory bounded across many anchors.
     private let textureMaxDimension: CGFloat = 512
+    private let weakAreaStickyDuration: TimeInterval = 1.2
+    private let weakAreaHoldDuration: TimeInterval = 3.0
 
     private struct CameraSnapshot {
         let image: UIImage
@@ -277,6 +471,21 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
     private struct ScoredSnapshot {
         let snapshot: CameraSnapshot
         var score: Float
+    }
+
+    private enum AnchorCoverageBucket {
+        case low
+        case medium
+        case high
+    }
+
+    private struct AnchorCoverageState {
+        let centroid: SIMD3<Float>
+        let classification: ARMeshClassification
+        let bestScore: Float
+        let candidateCount: Int
+        let coverageScore: Float
+        let bucket: AnchorCoverageBucket
     }
 
     /// How many candidate snapshots we keep per anchor. 5 is enough to
@@ -340,8 +549,11 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
             self?.trackedNodes.removeValue(forKey: id)
             self?.anchorsByID.removeValue(forKey: id)
             self?.snapshotsByAnchor.removeValue(forKey: id)
+            self?.anchorCoverageByID.removeValue(forKey: id)
             self?.anchorCentroidByID.removeValue(forKey: id)
+            self?.anchorBoundsByID.removeValue(forKey: id)
             self?.anchorCount = self?.trackedNodes.count ?? 0
+            self?.refreshCoverageTelemetry()
         }
     }
 
@@ -365,6 +577,7 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         for (id, _) in anchorCentroidByID {
             consider(snapshot: snap, forAnchorID: id)
         }
+        refreshCoverageTelemetry()
     }
 
     // MARK: - Scoring
@@ -400,6 +613,40 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         return SIMD3<Float>(world4.x, world4.y, world4.z)
     }
 
+    /// Approximate world-space bounds for one anchor by sampling up to 512
+    /// vertices. Good enough for the Explore readiness gate and much cheaper
+    /// than walking every vertex on every refresh.
+    private func computeWorldBounds(for anchor: ARMeshAnchor) -> (min: SIMD3<Float>, max: SIMD3<Float>) {
+        let g = anchor.geometry
+        let n = g.vertices.count
+        let transform = anchor.transform
+        guard n > 0 else {
+            let t = SIMD3<Float>(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
+            return (t, t)
+        }
+
+        let base = g.vertices.buffer.contents().advanced(by: g.vertices.offset)
+        let step = max(1, n / 512)
+        var minBound = SIMD3<Float>(.infinity, .infinity, .infinity)
+        var maxBound = SIMD3<Float>(-.infinity, -.infinity, -.infinity)
+        var i = 0
+        while i < n {
+            let local = base.advanced(by: i * g.vertices.stride)
+                .assumingMemoryBound(to: SIMD3<Float>.self).pointee
+            let world4 = simd_mul(transform, SIMD4<Float>(local.x, local.y, local.z, 1))
+            let world = SIMD3<Float>(world4.x, world4.y, world4.z)
+            minBound = simd_min(minBound, world)
+            maxBound = simd_max(maxBound, world)
+            i += step
+        }
+
+        if !minBound.x.isFinite || !maxBound.x.isFinite {
+            let t = SIMD3<Float>(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
+            return (t, t)
+        }
+        return (minBound, maxBound)
+    }
+
     /// Score a snapshot's suitability as the texture for an anchor.
     ///
     /// The product of three factors, each in [0, 1]:
@@ -417,14 +664,28 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         snapshot snap: CameraSnapshot,
         anchorCentroid centroid: SIMD3<Float>
     ) -> Float {
-        let toAnchor = centroid - snap.cameraPosition
+        score(
+            cameraPosition: snap.cameraPosition,
+            cameraForward: snap.cameraForward,
+            sharpness: snap.sharpness,
+            anchorCentroid: centroid
+        )
+    }
+
+    private func score(
+        cameraPosition: SIMD3<Float>,
+        cameraForward: SIMD3<Float>,
+        sharpness: Float,
+        anchorCentroid centroid: SIMD3<Float>
+    ) -> Float {
+        let toAnchor = centroid - cameraPosition
         let dist = simd_length(toAnchor)
         if dist < 1e-3 { return 0 }
         let dir = toAnchor / dist
-        let dot = simd_dot(snap.cameraForward, dir)
+        let dot = simd_dot(cameraForward, dir)
         let viewScore: Float = max(0, dot)              // [0, 1]
         let distScore: Float = min(1, 2.0 / max(dist, 0.5))  // 1 at <0.5m
-        let sharpScore: Float = min(1, max(0, snap.sharpness))
+        let sharpScore: Float = min(1, max(0, sharpness))
         return viewScore * distScore * sharpScore
     }
 
@@ -465,6 +726,66 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
             best = buf[k]
         }
         return best.snapshot
+    }
+
+    private func topSnapshots(forAnchorID id: UUID, limit: Int) -> [ScoredSnapshot] {
+        guard let buf = snapshotsByAnchor[id], !buf.isEmpty else { return [] }
+        return buf
+            .filter { $0.score > 0.001 }
+            .sorted { lhs, rhs in
+                if lhs.score == rhs.score {
+                    return lhs.snapshot.timestamp > rhs.snapshot.timestamp
+                }
+                return lhs.score > rhs.score
+            }
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    private struct RankedCandidateView {
+        let frame: CandidateViewPool.Frame
+        let uvData: Data
+        let qualityScore: Float
+    }
+
+    private func topCandidateViews(
+        anchorTransform: simd_float4x4,
+        anchorCentroid centroid: SIMD3<Float>,
+        vertices: [SIMD3<Float>],
+        candidateViews: CandidateViewSnapshot,
+        limit: Int
+    ) -> [RankedCandidateView] {
+        candidateViews.frames.compactMap { frame in
+            let projected = projectUVData(
+                vertices: vertices,
+                worldTransform: anchorTransform,
+                viewMatrix: frame.viewMatrix,
+                projectionMatrix: frame.projectionMatrix
+            )
+            guard projected.validVertexCount > 0 else { return nil }
+            let visibility = Float(projected.validVertexCount) / Float(max(1, vertices.count))
+            let baseScore = score(
+                cameraPosition: frame.cameraPosition,
+                cameraForward: frame.cameraForward,
+                sharpness: frame.sharpness,
+                anchorCentroid: centroid
+            )
+            let qualityScore = max(0.0001, baseScore * visibility)
+            guard qualityScore > 0.001 else { return nil }
+            return RankedCandidateView(
+                frame: frame,
+                uvData: projected.uvData,
+                qualityScore: qualityScore
+            )
+        }
+        .sorted { lhs, rhs in
+            if lhs.qualityScore == rhs.qualityScore {
+                return lhs.frame.timestamp > rhs.frame.timestamp
+            }
+            return lhs.qualityScore > rhs.qualityScore
+        }
+        .prefix(limit)
+        .map { $0 }
     }
 
     private func makeSnapshot(from frame: ARFrame) -> CameraSnapshot? {
@@ -544,6 +865,7 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         // centroid keeps "best-view" pointing at the latest geometry.
         let centroid = computeCentroid(for: anchor)
         anchorCentroidByID[id] = centroid
+        anchorBoundsByID[id] = computeWorldBounds(for: anchor)
 
         // Re-score every ring-buffer entry against the (possibly-shifted)
         // centroid. Cheap — at most maxSnapshotsPerAnchor entries.
@@ -564,9 +886,14 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         }
 
         // Pick the highest-scoring candidate and bake it.
+        let coverageState = anchorCoverageByID[id]
         if let snap = bestSnapshot(forAnchorID: id),
            let geom = makeTexturedGeometry(from: anchor, snapshot: snap) {
-            let material = makeTexturedMaterial(image: snap.image)
+            let material = makeTexturedMaterial(
+                image: snap.image,
+                coverageScore: coverageState?.coverageScore ?? 0,
+                bucket: coverageState?.bucket ?? .low
+            )
             geom.materials = [material]
             node.geometry = geom
         } else {
@@ -574,7 +901,7 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
             // fired). Show the translucent teal fallback so the user sees
             // something; the next didUpdate will retro-fit a real texture.
             let geom = makeFlatGeometry(from: anchor)
-            geom.materials = [makeFlatMaterial()]
+            geom.materials = [makeFlatMaterial(bucket: coverageState?.bucket ?? .low)]
             node.geometry = geom
         }
 
@@ -587,6 +914,7 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         // object across didAdd/didUpdate, but we want our reference to track
         // the latest geometry generation regardless.
         anchorsByID[id] = anchor
+        refreshCoverageTelemetry()
     }
 
     /// Build SCNGeometry with vertex positions, normals, and **per-vertex
@@ -717,7 +1045,11 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         return SCNGeometry(sources: sources, elements: [element])
     }
 
-    private func makeTexturedMaterial(image: UIImage) -> SCNMaterial {
+    private func makeTexturedMaterial(
+        image: UIImage,
+        coverageScore: Float = 0,
+        bucket: AnchorCoverageBucket = .low
+    ) -> SCNMaterial {
         let m = SCNMaterial()
         m.lightingModel = .constant
         m.diffuse.contents = image
@@ -728,16 +1060,386 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         m.transparency = 0.85
         m.isDoubleSided = true
         m.writesToDepthBuffer = false
+        applyCoverageTint(
+            to: m,
+            coverageScore: coverageScore,
+            bucket: bucket
+        )
         return m
     }
 
-    private func makeFlatMaterial() -> SCNMaterial {
+    private func makeFlatMaterial(bucket: AnchorCoverageBucket = .low) -> SCNMaterial {
         let m = SCNMaterial()
         m.lightingModel = .constant
         m.diffuse.contents = UIColor.systemTeal.withAlphaComponent(0.30)
         m.transparency = 0.30
         m.isDoubleSided = true
         m.writesToDepthBuffer = false
+        applyCoverageTint(
+            to: m,
+            coverageScore: 0,
+            bucket: bucket
+        )
         return m
+    }
+
+    private func refreshCoverageTelemetry() {
+        var nextStates: [UUID: AnchorCoverageState] = [:]
+        nextStates.reserveCapacity(anchorsByID.count)
+
+        for (id, anchor) in anchorsByID {
+            let centroid = anchorCentroidByID[id] ?? computeCentroid(for: anchor)
+            let classification = Self.dominantClass(of: anchor)
+            let buf = snapshotsByAnchor[id] ?? []
+            let bestScore = buf.map(\.score).max() ?? 0
+            let candidateCount = buf.count
+            let candidateFactor = min(1.0, Float(candidateCount) / 3.0)
+            let classFactor = Self.classificationConfidence(for: classification)
+            let coverageScore = bestScore * candidateFactor * classFactor
+            let bucket: AnchorCoverageBucket
+            switch coverageScore {
+            case ..<0.30:
+                bucket = .low
+            case ..<0.70:
+                bucket = .medium
+            default:
+                bucket = .high
+            }
+
+            nextStates[id] = AnchorCoverageState(
+                centroid: centroid,
+                classification: classification,
+                bestScore: bestScore,
+                candidateCount: candidateCount,
+                coverageScore: coverageScore,
+                bucket: bucket
+            )
+        }
+
+        anchorCoverageByID = nextStates
+        surfaceCoverage = SurfaceCoverageSummary(
+            wallFraction: averageCoverage(for: .wall, in: nextStates),
+            floorFraction: averageCoverage(for: .floor, in: nextStates),
+            ceilingFraction: averageCoverage(for: .ceiling, in: nextStates),
+            wallCount: count(of: .wall, in: nextStates),
+            floorCount: count(of: .floor, in: nextStates),
+            ceilingCount: count(of: .ceiling, in: nextStates)
+        )
+        weakAreaHint = makeWeakAreaHint(from: nextStates)
+        explorerReadiness = makeExplorerReadiness(from: nextStates)
+        refreshLiveNodeTints(using: nextStates)
+    }
+
+    private func makeExplorerReadiness(
+        from states: [UUID: AnchorCoverageState]
+    ) -> ExplorerReadiness {
+        let texturedAnchorCount = states.values.filter { $0.candidateCount > 0 && $0.bestScore > 0.001 }.count
+
+        var minBound = SIMD3<Float>(.infinity, .infinity, .infinity)
+        var maxBound = SIMD3<Float>(-.infinity, -.infinity, -.infinity)
+        for bounds in anchorBoundsByID.values {
+            minBound = simd_min(minBound, bounds.min)
+            maxBound = simd_max(maxBound, bounds.max)
+        }
+
+        let volume: Float
+        if minBound.x.isFinite && maxBound.x.isFinite {
+            let extent = simd_max(maxBound - minBound, SIMD3<Float>(repeating: 0))
+            volume = extent.x * extent.y * extent.z
+        } else {
+            volume = 0
+        }
+
+        return ExplorerReadiness(
+            texturedAnchorCount: texturedAnchorCount,
+            capturedVolumeCubicMeters: volume
+        )
+    }
+
+    private func refreshLiveNodeTints(using states: [UUID: AnchorCoverageState]) {
+        for (id, node) in trackedNodes {
+            guard let material = node.geometry?.firstMaterial else { continue }
+            let state = states[id]
+            applyCoverageTint(
+                to: material,
+                coverageScore: state?.coverageScore ?? 0,
+                bucket: state?.bucket ?? .low
+            )
+        }
+    }
+
+    private func averageCoverage(
+        for classification: ARMeshClassification,
+        in states: [UUID: AnchorCoverageState]
+    ) -> Double {
+        let matching = states.values.filter { $0.classification == classification }
+        guard !matching.isEmpty else { return 0 }
+        let sum = matching.reduce(0.0) { $0 + Double($1.coverageScore) }
+        return min(1.0, max(0.0, sum / Double(matching.count)))
+    }
+
+    private func count(
+        of classification: ARMeshClassification,
+        in states: [UUID: AnchorCoverageState]
+    ) -> Int {
+        states.values.filter { $0.classification == classification }.count
+    }
+
+    private func makeWeakAreaHint(
+        from states: [UUID: AnchorCoverageState]
+    ) -> WeakAreaHint? {
+        let candidates = states.compactMap { entry -> (id: UUID, state: AnchorCoverageState)? in
+            let state = entry.value
+            guard state.coverageScore < 0.70,
+                  (state.classification == .wall || state.classification == .floor || state.classification == .ceiling)
+            else {
+                return nil
+            }
+            return (entry.key, state)
+        }
+
+        guard let frame = arSession?.currentFrame else {
+            resetWeakAreaTracking()
+            return nil
+        }
+
+        guard let weakest = candidates.min(by: { $0.state.coverageScore < $1.state.coverageScore }) ??
+                states.min(by: { $0.value.coverageScore < $1.value.coverageScore }).map({ ($0.key, $0.value) }),
+              weakest.state.coverageScore < 0.70
+        else {
+            resetWeakAreaTracking()
+            return nil
+        }
+
+        let now = frame.timestamp
+        let selected = resolveWeakTarget(
+            weakest: weakest,
+            candidates: candidates,
+            now: now
+        )
+        let cam = frame.camera.transform
+        let camPos = SIMD3<Float>(cam.columns.3.x, cam.columns.3.y, cam.columns.3.z)
+        let forward = simd_normalize(SIMD3<Float>(-cam.columns.2.x, -cam.columns.2.y, -cam.columns.2.z))
+        let right = simd_normalize(SIMD3<Float>(cam.columns.0.x, cam.columns.0.y, cam.columns.0.z))
+        let up = simd_normalize(SIMD3<Float>(cam.columns.1.x, cam.columns.1.y, cam.columns.1.z))
+
+        let toTarget = selected.state.centroid - camPos
+        let x = simd_dot(toTarget, right)
+        let y = simd_dot(toTarget, up)
+        let z = simd_dot(toTarget, forward)
+
+        var nx: Float = 0
+        var ny: Float = 0
+        if z > 0.05 {
+            nx = x / z
+            ny = y / z
+        } else {
+            nx = x >= 0 ? 1.4 : -1.4
+            ny = y >= 0 ? 1.0 : -1.0
+        }
+
+        let isOnScreen = z > 0.05 && abs(nx) <= 0.60 && abs(ny) <= 0.45
+        let clampedX = max(0.08, min(0.92, CGFloat((nx / 1.2) + 0.5)))
+        let clampedY = max(0.10, min(0.90, CGFloat(0.5 - (ny / 0.9))))
+        let hDir = x > 0.08 ? 1 : (x < -0.08 ? -1 : 0)
+        let vDir = y > 0.08 ? 1 : (y < -0.08 ? -1 : 0)
+
+        let dwellProgress: CGFloat
+        let label: String
+        if isOnScreen {
+            if activeWeakTargetVisibleSince == nil {
+                activeWeakTargetVisibleSince = now
+            }
+            let heldFor = max(0, now - (activeWeakTargetVisibleSince ?? now))
+            dwellProgress = min(1.0, CGFloat(heldFor / weakAreaHoldDuration))
+            if dwellProgress < 1.0 {
+                let remaining = max(0, weakAreaHoldDuration - heldFor)
+                let remainingLabel = String(format: "%.1fs", remaining)
+                label = "Hold on this \(Self.label(for: selected.state.classification)) \(remainingLabel)"
+            } else {
+                label = "Good coverage — sweep across this \(Self.label(for: selected.state.classification))"
+            }
+        } else {
+            activeWeakTargetVisibleSince = nil
+            dwellProgress = 0
+            label = "Pan \(Self.directionLabel(horizontal: hDir, vertical: vDir)): \(Self.label(for: selected.state.classification))"
+        }
+
+        return WeakAreaHint(
+            label: label,
+            normalizedX: clampedX,
+            normalizedY: clampedY,
+            isOnScreen: isOnScreen,
+            horizontalDirection: hDir,
+            verticalDirection: vDir,
+            dwellProgress: dwellProgress
+        )
+    }
+
+    private func resolveWeakTarget(
+        weakest: (id: UUID, state: AnchorCoverageState),
+        candidates: [(id: UUID, state: AnchorCoverageState)],
+        now: TimeInterval
+    ) -> (id: UUID, state: AnchorCoverageState) {
+        guard let activeWeakTargetID,
+              let active = candidates.first(where: { $0.id == activeWeakTargetID })
+        else {
+            activeWeakTargetID = weakest.id
+            activeWeakTargetLockedAt = now
+            activeWeakTargetVisibleSince = nil
+            return weakest
+        }
+
+        let lockAge = now - activeWeakTargetLockedAt
+        let activeStillCompetitive = active.state.coverageScore <= weakest.state.coverageScore + 0.10
+        if lockAge < weakAreaStickyDuration || activeStillCompetitive {
+            return active
+        }
+
+        if weakest.id != activeWeakTargetID {
+            self.activeWeakTargetID = weakest.id
+            self.activeWeakTargetLockedAt = now
+            self.activeWeakTargetVisibleSince = nil
+        }
+        return weakest
+    }
+
+    private func resetWeakAreaTracking() {
+        activeWeakTargetID = nil
+        activeWeakTargetLockedAt = 0
+        activeWeakTargetVisibleSince = nil
+    }
+
+    private func applyCoverageTint(
+        to material: SCNMaterial,
+        coverageScore: Float,
+        bucket: AnchorCoverageBucket
+    ) {
+        let alpha = CGFloat(max(0.06, 0.30 - (0.22 * CGFloat(coverageScore))))
+        material.emission.contents = Self.tintColor(for: bucket).withAlphaComponent(alpha)
+    }
+
+    private static func tintColor(for bucket: AnchorCoverageBucket) -> UIColor {
+        switch bucket {
+        case .low:
+            return UIColor.systemRed
+        case .medium:
+            return UIColor.systemYellow
+        case .high:
+            return UIColor.systemGreen
+        }
+    }
+
+    private static func classificationConfidence(for classification: ARMeshClassification) -> Float {
+        switch classification {
+        case .wall, .floor, .ceiling:
+            return 1.0
+        case .table, .seat, .window, .door:
+            return 0.85
+        case .none:
+            return 0.70
+        @unknown default:
+            return 0.70
+        }
+    }
+
+    private static func label(for classification: ARMeshClassification) -> String {
+        switch classification {
+        case .wall:    return "wall"
+        case .floor:   return "floor"
+        case .ceiling: return "ceiling"
+        case .table:   return "table"
+        case .seat:    return "seat"
+        case .window:  return "window"
+        case .door:    return "door"
+        case .none:    return "area"
+        @unknown default: return "area"
+        }
+    }
+
+    private static func directionLabel(horizontal: Int, vertical: Int) -> String {
+        switch (horizontal, vertical) {
+        case (-1, 1): return "up-left"
+        case (0, 1): return "up"
+        case (1, 1): return "up-right"
+        case (-1, 0): return "left"
+        case (1, 0): return "right"
+        case (-1, -1): return "down-left"
+        case (0, -1): return "down"
+        case (1, -1): return "down-right"
+        default: return "around"
+        }
+    }
+
+    func roomPlanObjectCoverage(for objects: [RoomPlanDetectedObject]) -> [RoomPlanObjectCoverage] {
+        guard !objects.isEmpty else { return [] }
+        return objects.map { object in
+            let nearby = anchorCoverageByID.values.filter {
+                objectContainsAnchorCentroid(
+                    objectTransform: object.transform,
+                    objectDimensions: object.dimensions,
+                    centroid: $0.centroid
+                )
+            }
+            let minCoverage = nearby.map(\.coverageScore).min() ?? 0
+            return RoomPlanObjectCoverage(
+                id: object.id,
+                label: object.label,
+                coverageScore: minCoverage,
+                needsMoreCoverage: !nearby.isEmpty && minCoverage < 0.70
+            )
+        }
+    }
+
+    private func objectContainsAnchorCentroid(
+        objectTransform: simd_float4x4,
+        objectDimensions: SIMD3<Float>,
+        centroid: SIMD3<Float>
+    ) -> Bool {
+        let halfExtents = objectDimensions * 0.5
+        let padding = SIMD3<Float>(
+            repeating: max(0.18, max(objectDimensions.x, objectDimensions.z) * 0.08)
+        )
+        let inverse = objectTransform.inverse
+        let local = simd_mul(inverse, SIMD4<Float>(centroid.x, centroid.y, centroid.z, 1))
+        return abs(local.x) <= halfExtents.x + padding.x &&
+               abs(local.y) <= halfExtents.y + padding.y &&
+               abs(local.z) <= halfExtents.z + padding.z
+    }
+
+    func roomPlanCoveragePrompt(for objects: [RoomPlanDetectedObject]) -> String? {
+        guard !objects.isEmpty else { return nil }
+        var weakestPrompt: (label: String, score: Float)?
+        for objectCoverage in roomPlanObjectCoverage(for: objects) {
+            guard objectCoverage.needsMoreCoverage else { continue }
+            let label = "You haven't fully scanned the \(objectCoverage.label.lowercased()) — walk around it once more."
+            if weakestPrompt == nil || objectCoverage.coverageScore < weakestPrompt!.score {
+                weakestPrompt = (label, objectCoverage.coverageScore)
+            }
+        }
+        return weakestPrompt?.label
+    }
+
+    /// Pick the most frequent classification among the anchor's faces. We
+    /// sample up to the first 1024 faces — a chunk that big is uncommon
+    /// and the dominant class converges quickly.
+    private static func dominantClass(of anchor: ARMeshAnchor) -> ARMeshClassification {
+        guard let cls = anchor.geometry.classification else { return .none }
+        let count = min(cls.count, 1024)
+        guard count > 0 else { return .none }
+        let base = cls.buffer.contents().advanced(by: cls.offset)
+        var hist = [Int](repeating: 0, count: 8)
+        for i in 0..<count {
+            let raw = base.advanced(by: i * cls.stride)
+                .assumingMemoryBound(to: UInt8.self).pointee
+            if raw < 8 { hist[Int(raw)] += 1 }
+        }
+        var bestIdx = 0
+        var bestCount = -1
+        for (i, n) in hist.enumerated() where n > bestCount {
+            bestCount = n
+            bestIdx = i
+        }
+        return ARMeshClassification(rawValue: bestIdx) ?? .none
     }
 }

@@ -40,11 +40,14 @@ struct CaptureView: View {
     @State private var explorerSnapshots: [TexturedMeshRenderer.ExplorerSnapshot] = []
     @State private var showingExplorer: Bool = false
     @State private var bakeError: String? = nil
+    @State private var hasExploredBefore: Bool = false
+    @State private var showResumeBanner: Bool = false
 
     var body: some View {
         ZStack {
             preview
             scrim
+            roomPlanOverlay
             hud
         }
         .ignoresSafeArea()
@@ -106,8 +109,14 @@ struct CaptureView: View {
             // pause so the user can keep extending the mesh.
             explorerSnapshots = []
             coordinator.resumeFromExploration()
+            if hasExploredBefore {
+                presentResumeBanner()
+            }
         }) {
-            MeshExplorerView(snapshots: explorerSnapshots)
+            MeshExplorerView(
+                snapshots: explorerSnapshots,
+                preferredSpawnEyePosition: coordinator.recordingStartWorldPosition
+            )
         }
     }
 
@@ -132,6 +141,26 @@ struct CaptureView: View {
         }
     }
 
+    private var roomPlanOverlay: some View {
+        GeometryReader { proxy in
+            let highlightedIDs = Set(
+                texturedMesh.roomPlanObjectCoverage(for: coordinator.roomPlanObjects)
+                    .filter(\.needsMoreCoverage)
+                    .map(\.id)
+            )
+            let overlays = coordinator.projectedRoomPlanOverlays(
+                viewportSize: proxy.size,
+                highlighting: highlightedIDs
+            )
+            ZStack {
+                ForEach(overlays) { overlay in
+                    RoomPlanObjectOverlayView(overlay: overlay)
+                }
+            }
+            .allowsHitTesting(false)
+        }
+    }
+
     private var hud: some View {
         VStack(spacing: 0) {
             topBar
@@ -143,9 +172,22 @@ struct CaptureView: View {
                     sectorVisitFractions: sectorFractions
                 )
                 .frame(width: 280, height: 280)
+                if let hint = texturedMesh.weakAreaHint {
+                    WeakAreaPromptView(hint: hint)
+                        .frame(width: 280, height: 280)
+                }
                 VStack(spacing: 12) {
                     Spacer()
                     TrackingChip(guidance: coordinator.guidance)
+                    if texturedMesh.surfaceCoverage.hasAnyData {
+                        SurfaceCoverageStatsView(summary: texturedMesh.surfaceCoverage)
+                    }
+                    if let objectPrompt = roomPlanCoveragePrompt {
+                        RoomPlanPromptPill(text: objectPrompt)
+                    } else if let instruction = coordinator.roomPlanInstructionLabel,
+                              coordinator.roomPlanIsRunning {
+                        RoomPlanPromptPill(text: instruction)
+                    }
                 }
                 .padding(.bottom, 10)
             }
@@ -180,6 +222,16 @@ struct CaptureView: View {
             .padding(.horizontal, 12).padding(.vertical, 7)
             .background(Capsule().fill(.ultraThinMaterial).environment(\.colorScheme, .dark))
             .overlay(Capsule().stroke(Theme.Color.halo.opacity(0.4), lineWidth: 0.8))
+            if showResumeBanner {
+                Text("Resumed scan — \(Int(coordinator.coverageFraction * 100))% covered")
+                    .font(Theme.Font.mono(10))
+                    .foregroundStyle(Theme.Color.textPrimary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(Capsule().fill(.ultraThinMaterial).environment(\.colorScheme, .dark))
+                    .overlay(Capsule().stroke(Theme.Color.halo.opacity(0.35), lineWidth: 0.8))
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
         .padding(.horizontal, 18)
         .padding(.top, 60)
@@ -217,11 +269,16 @@ struct CaptureView: View {
     private var bottomDock: some View {
         VStack(spacing: 12) {
             progressBlock
-            // Gold-tier "Explore Mesh" button. Visible after at least a
-            // handful of anchors have been textured so it's actually
-            // meaningful to walk into. Capture continues underneath.
-            if texturedMesh.anchorCount >= 3 {
+            // Gate Explore until the scan has enough textured anchors AND a
+            // room-sized captured volume so the first-person walk is stable.
+            if texturedMesh.explorerReadiness.isReady {
                 exploreButton
+            } else {
+                Text(explorerReadinessLabel)
+                    .font(Theme.Font.mono(11))
+                    .foregroundStyle(Theme.Color.textDim)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
             }
             HStack(spacing: 12) {
                 GhostButton(title: "Cancel") {
@@ -325,7 +382,7 @@ struct CaptureView: View {
 
     private func stopTicker() { ticker?.invalidate(); ticker = nil }
 
-    // MARK: - Atlas bake
+    // MARK: - Exploration
 
     /// Tap handler for the EXPLORE MESH button.
     ///
@@ -336,22 +393,221 @@ struct CaptureView: View {
     /// physics body in its makeUIView.
     @MainActor
     private func startExploration() {
+        showResumeBanner = false
         coordinator.pauseForExploration()
-        let snaps = texturedMesh.snapshotForExplorer()
+        let candidateViews = coordinator.snapshotCandidateViews()
+        let snaps = texturedMesh.snapshotForExplorer(candidateViews: candidateViews)
         guard !snaps.isEmpty else {
             bakeError = "No mesh has been captured yet. Sweep the room a bit longer."
             return
         }
-        // Free the per-anchor ring buffers — explorer's ExplorerSnapshot
-        // copies already own everything they need. The live overlay
-        // rebuilds itself when the user dismisses and resumes scanning.
-        texturedMesh.releaseLiveSnapshots()
         explorerSnapshots = snaps
+        hasExploredBefore = true
         showingExplorer = true
+    }
+
+    @MainActor
+    private func presentResumeBanner() {
+        showResumeBanner = true
+        Task {
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            await MainActor.run {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    showResumeBanner = false
+                }
+            }
+        }
     }
 
     private func timeString(_ t: TimeInterval) -> String {
         let s = Int(t)
         return String(format: "%02d:%02d", s / 60, s % 60)
+    }
+
+    private var roomPlanCoveragePrompt: String? {
+        texturedMesh.roomPlanCoveragePrompt(for: coordinator.roomPlanObjects)
+    }
+
+    private var explorerReadinessLabel: String {
+        let readiness = texturedMesh.explorerReadiness
+        if !readiness.hasEnoughTexturedAnchors {
+            return "Coverage \(readiness.texturedAnchorCount)/\(TexturedMeshRenderer.ExplorerReadiness.requiredTexturedAnchorCount) textured anchors — keep scanning"
+        }
+
+        let volume = String(format: "%.1f", readiness.capturedVolumeCubicMeters)
+        let minimum = String(format: "%.1f", TexturedMeshRenderer.ExplorerReadiness.minimumCapturedVolumeCubicMeters)
+        return "Coverage volume \(volume)/\(minimum) m3 — keep scanning"
+    }
+}
+
+private struct SurfaceCoverageStatsView: View {
+    let summary: TexturedMeshRenderer.SurfaceCoverageSummary
+
+    var body: some View {
+        HStack(spacing: 8) {
+            statPill(label: "WALLS", fraction: summary.wallFraction)
+            statPill(label: "FLOOR", fraction: summary.floorFraction)
+            statPill(label: "CEIL", fraction: summary.ceilingFraction)
+        }
+    }
+
+    private func statPill(label: String, fraction: Double) -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(color(for: fraction))
+                .frame(width: 5, height: 5)
+            Text("\(label) \(Int(fraction * 100))%")
+                .font(Theme.Font.mono(10))
+                .foregroundStyle(Theme.Color.textPrimary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            Capsule().fill(.ultraThinMaterial)
+                .environment(\.colorScheme, .dark)
+        )
+        .overlay(
+            Capsule().stroke(color(for: fraction).opacity(0.45), lineWidth: 0.8)
+        )
+    }
+
+    private func color(for fraction: Double) -> Color {
+        switch fraction {
+        case ..<0.30:
+            return Theme.Color.danger
+        case ..<0.70:
+            return Theme.Color.halo
+        default:
+            return Theme.Color.success
+        }
+    }
+}
+
+private struct WeakAreaPromptView: View {
+    let hint: TexturedMeshRenderer.WeakAreaHint
+
+    var body: some View {
+        GeometryReader { geo in
+            let width = geo.size.width
+            let height = geo.size.height
+            let x = width * hint.normalizedX
+            let y = height * hint.normalizedY
+
+            ZStack {
+                if hint.isOnScreen {
+                    ZStack {
+                        Circle()
+                            .stroke(Theme.Color.halo, lineWidth: 2)
+                            .frame(width: 34, height: 34)
+                            .shadow(color: Theme.Color.halo.opacity(0.7), radius: 10)
+                        Circle()
+                            .trim(from: 0, to: hint.dwellProgress)
+                            .stroke(
+                                Theme.Color.success,
+                                style: StrokeStyle(lineWidth: 3, lineCap: .round)
+                            )
+                            .frame(width: 42, height: 42)
+                            .rotationEffect(.degrees(-90))
+                        Circle()
+                            .fill(Theme.Color.halo.opacity(0.16))
+                            .frame(width: 18, height: 18)
+                    }
+                    .position(x: x, y: y)
+                } else {
+                    Image(systemName: arrowSymbol)
+                        .font(.system(size: 26, weight: .bold))
+                        .foregroundStyle(Theme.Color.halo)
+                        .shadow(color: Theme.Color.halo.opacity(0.7), radius: 10)
+                        .position(x: x, y: y)
+                }
+
+                Text(hint.label.uppercased())
+                    .font(Theme.Font.caption(10))
+                    .tracking(1.4)
+                    .foregroundStyle(Theme.Color.textPrimary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        Capsule().fill(.ultraThinMaterial)
+                            .environment(\.colorScheme, .dark)
+                    )
+                    .overlay(
+                        Capsule().stroke(Theme.Color.halo.opacity(0.45), lineWidth: 0.8)
+                    )
+                    .position(x: labelX(width: width, pointX: x), y: max(18, y - 24))
+            }
+        }
+    }
+
+    private var arrowSymbol: String {
+        switch (hint.horizontalDirection, hint.verticalDirection) {
+        case (-1, 1): return "arrow.up.left.circle.fill"
+        case (0, 1): return "arrow.up.circle.fill"
+        case (1, 1): return "arrow.up.right.circle.fill"
+        case (-1, 0): return "arrow.left.circle.fill"
+        case (1, 0): return "arrow.right.circle.fill"
+        case (-1, -1): return "arrow.down.left.circle.fill"
+        case (0, -1): return "arrow.down.circle.fill"
+        case (1, -1): return "arrow.down.right.circle.fill"
+        default: return "scope"
+        }
+    }
+
+    private func labelX(width: CGFloat, pointX: CGFloat) -> CGFloat {
+        min(width - 74, max(74, pointX))
+    }
+}
+
+private struct RoomPlanPromptPill: View {
+    let text: String
+
+    var body: some View {
+        Text(text.uppercased())
+            .font(Theme.Font.caption(10))
+            .tracking(1.4)
+            .foregroundStyle(Theme.Color.textPrimary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(
+                Capsule().fill(.ultraThinMaterial)
+                    .environment(\.colorScheme, .dark)
+            )
+            .overlay(
+                Capsule().stroke(Theme.Color.electric.opacity(0.45), lineWidth: 0.8)
+            )
+    }
+}
+
+private struct RoomPlanObjectOverlayView: View {
+    let overlay: RoomPlanProjectedOverlay
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(borderColor, style: StrokeStyle(lineWidth: 1.4, dash: [7, 5]))
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(borderColor.opacity(0.06))
+                )
+            Text(overlay.label)
+                .font(Theme.Font.mono(10))
+                .foregroundStyle(Theme.Color.textPrimary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(
+                    Capsule().fill(Theme.Color.inkRaised.opacity(0.88))
+                )
+                .overlay(
+                    Capsule().stroke(borderColor.opacity(0.55), lineWidth: 0.8)
+                )
+                .offset(x: 10, y: -12)
+        }
+        .frame(width: overlay.rect.width, height: overlay.rect.height)
+        .position(x: overlay.rect.midX, y: overlay.rect.midY)
+        .shadow(color: borderColor.opacity(0.25), radius: 10)
+    }
+
+    private var borderColor: Color {
+        overlay.needsMoreCoverage ? Theme.Color.halo : Theme.Color.electric
     }
 }

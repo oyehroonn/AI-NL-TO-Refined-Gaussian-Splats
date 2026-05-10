@@ -51,6 +51,7 @@
 		A10000000000000000001033 /* MeshExplorerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B33 /* MeshExplorerView.swift */; };
 		A10000000000000000001034 /* CandidateViewPool.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B34 /* CandidateViewPool.swift */; };
 		A10000000000000000001035 /* MeshAtlasBaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B35 /* MeshAtlasBaker.swift */; };
+		A10000000000000000001036 /* AnchorColorBalance.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B36 /* AnchorColorBalance.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -100,6 +101,7 @@
 		A100000000000000000000B33 /* MeshExplorerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshExplorerView.swift; sourceTree = "<group>"; };
 		A100000000000000000000B34 /* CandidateViewPool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CandidateViewPool.swift; sourceTree = "<group>"; };
 		A100000000000000000000B35 /* MeshAtlasBaker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshAtlasBaker.swift; sourceTree = "<group>"; };
+		A100000000000000000000B36 /* AnchorColorBalance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnchorColorBalance.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -241,6 +243,7 @@
 			children = (
 				A100000000000000000000B33 /* MeshExplorerView.swift */,
 				A100000000000000000000B35 /* MeshAtlasBaker.swift */,
+				A100000000000000000000B36 /* AnchorColorBalance.swift */,
 			);
 			path = MeshExplorer;
 			sourceTree = "<group>";
@@ -368,6 +371,7 @@
 				A10000000000000000001033 /* MeshExplorerView.swift in Sources */,
 				A10000000000000000001034 /* CandidateViewPool.swift in Sources */,
 				A10000000000000000001035 /* MeshAtlasBaker.swift in Sources */,
+				A10000000000000000001036 /* AnchorColorBalance.swift in Sources */,
 				A1000000000000000000102B /* ARCaptureCoordinator.swift in Sources */,
 				A1000000000000000000102C /* ARSCNViewContainer.swift in Sources */,
 				A1000000000000000000102D /* CoverageMaskView.swift in Sources */,

@@ -89,7 +89,7 @@ private struct LoopingDrawShape<S: Shape>: View {
         return CGFloat(min(1.0, p / 0.7))
     }
 
-    private func pointAt<S: Shape>(progress: CGFloat, in _: S) -> CGPoint? {
+    private func pointAt<InnerShape: Shape>(progress: CGFloat, in _: InnerShape) -> CGPoint? {
         // Without UIKit hit-testing on the path, approximate with the OrbitPath
         // sample (good enough — head dot is decorative). Most diagrams already
         // include their own travelling marks; this fallback is only used here.

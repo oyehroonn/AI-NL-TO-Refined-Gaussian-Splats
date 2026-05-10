@@ -8,8 +8,25 @@
 import ARKit
 import Combine
 import Foundation
+import RoomPlan
 import SwiftUI
 import simd
+import UIKit
+
+struct RoomPlanDetectedObject: Identifiable, Equatable {
+    let id: UUID
+    let label: String
+    let transform: simd_float4x4
+    let dimensions: SIMD3<Float>
+    let confidenceLabel: String
+}
+
+struct RoomPlanProjectedOverlay: Identifiable, Equatable {
+    let id: UUID
+    let label: String
+    let rect: CGRect
+    let needsMoreCoverage: Bool
+}
 
 @MainActor
 final class ARCaptureCoordinator: NSObject, ObservableObject {
@@ -22,6 +39,9 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
     @Published private(set) var guidance: GuidanceState = .init(label: "preparing", level: .normal)
     @Published private(set) var trackingStateLabel: String = "preparing"
     @Published private(set) var diskBytes: Int64 = 0
+    @Published private(set) var roomPlanObjects: [RoomPlanDetectedObject] = []
+    @Published private(set) var roomPlanInstructionLabel: String?
+    @Published private(set) var roomPlanIsRunning: Bool = false
 
     // MARK: - Captured frames (consumed by ManifestUploader)
 
@@ -52,6 +72,8 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
     private var qualityGate: QualityGate?
     private let loopDetector = LoopClosureDetector()
     private var frameLogger: FrameLogger?
+    private var roomCaptureSession: RoomCaptureSession?
+    private var roomCaptureConfiguration: RoomCaptureSession.Configuration?
 
     /// P2 — pool of "candidate views" used by MeshAtlasBaker to texture
     /// the mesh. Every accepted frame feeds this pool; on bake, we hand
@@ -71,6 +93,7 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
     private var lastObservedPosition: SIMD3<Float>?
     private var lastHUDPushAt: TimeInterval = 0
     private var startedAt: Date = Date()
+    private(set) var recordingStartCameraTransform: simd_float4x4?
 
     /// Wall-clock-to-mach-time bridge. ARFrame.timestamp is mach-time
     /// seconds since system boot, NOT a Unix epoch. We sample
@@ -148,6 +171,7 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
         mappingHistogram.removeAll()
         totalFramesObserved = 0
         startedAt = Date()
+        recordingStartCameraTransform = nil
         unixEpochOffset = 0
         hasUnixEpochOffset = false
         highResInFlight = false
@@ -159,6 +183,9 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
         coverageFraction = 0
         guidance = .init(label: "warming up", level: .normal)
         diskBytes = 0
+        roomPlanObjects = []
+        roomPlanInstructionLabel = nil
+        roomPlanIsRunning = false
 
         let config = makeConfiguration(
             policy: policy,
@@ -168,11 +195,13 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
         arSession.delegate = self
         arSession.delegateQueue = nil  // main; cheap because we offload heavy work
         arSession.run(config, options: [.resetTracking, .removeExistingAnchors])
+        startRoomPlanCaptureIfSupported()
         isRunning = true
     }
 
     func stop() {
         guard isRunning else { return }
+        stopRoomPlanCapture()
         isRunning = false
         arSession.pause()
     }
@@ -196,6 +225,7 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
                 cadence: cadence
             )
         }
+        stopRoomPlanCapture()
         arSession.pause()
         pausedForExploration = true
     }
@@ -213,6 +243,7 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
             let cfg = makeConfiguration(policy: policy, capability: cap, cadence: cadence)
             arSession.run(cfg, options: [])
         }
+        startRoomPlanCaptureIfSupported()
     }
 
     /// Called by CaptureView when the user taps "Stop & Upload" or when stop
@@ -220,6 +251,7 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
     /// sceneReconstruction mesh, writes the rejected-frames JSON, then
     /// routes the caller via `onFinished`.
     func finishAndDeliver() async {
+        stopRoomPlanCapture()
         if isRunning { arSession.pause() }
         if let logger = frameLogger {
             // 1. WorldMap sidecar.
@@ -338,11 +370,67 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
     /// Sidecar URL for rejected_frames.json.
     var rejectedFramesSidecarURL: URL? { frameLogger?.rejectedFramesURL }
 
+    /// Eye-level camera position from the first observed AR frame in the
+    /// current capture session. Used by the explorer to respawn at the
+    /// recording start point instead of the room's AABB center.
+    var recordingStartWorldPosition: SIMD3<Float>? {
+        guard let t = recordingStartCameraTransform else { return nil }
+        return SIMD3<Float>(t.columns.3.x, t.columns.3.y, t.columns.3.z)
+    }
+
     /// P2 — handoff to MeshAtlasBaker. Take this snapshot AFTER calling
     /// `pauseForExploration()` so the pool doesn't ingest new frames
     /// while the bake is reading slices from the texture array.
     func snapshotCandidateViews() -> CandidateViewSnapshot? {
         return candidateViewPool?.snapshot()
+    }
+
+    func projectedRoomPlanOverlays(
+        viewportSize: CGSize,
+        highlighting highlightedObjectIDs: Set<UUID> = []
+    ) -> [RoomPlanProjectedOverlay] {
+        guard let frame = arSession.currentFrame,
+              viewportSize.width > 0,
+              viewportSize.height > 0
+        else {
+            return []
+        }
+        let cam = frame.camera.transform
+        let camPos = SIMD3<Float>(cam.columns.3.x, cam.columns.3.y, cam.columns.3.z)
+        let forward = simd_normalize(
+            SIMD3<Float>(-cam.columns.2.x, -cam.columns.2.y, -cam.columns.2.z)
+        )
+        return roomPlanObjects.compactMap { object in
+            let corners = objectWorldCorners(for: object)
+            var projected: [CGPoint] = []
+            projected.reserveCapacity(corners.count)
+            var anyVisible = false
+            for world in corners {
+                if simd_dot(world - camPos, forward) > 0.05 {
+                    anyVisible = true
+                }
+                let p = frame.camera.projectPoint(
+                    world,
+                    orientation: .portrait,
+                    viewportSize: viewportSize
+                )
+                projected.append(CGPoint(x: CGFloat(p.x), y: CGFloat(p.y)))
+            }
+            guard anyVisible, !projected.isEmpty else { return nil }
+            let xs = projected.map(\.x)
+            let ys = projected.map(\.y)
+            let minX = max(8, xs.min() ?? 0)
+            let maxX = min(viewportSize.width - 8, xs.max() ?? 0)
+            let minY = max(8, ys.min() ?? 0)
+            let maxY = min(viewportSize.height - 8, ys.max() ?? 0)
+            guard maxX - minX > 16, maxY - minY > 16 else { return nil }
+            return RoomPlanProjectedOverlay(
+                id: object.id,
+                label: object.label.uppercased(),
+                rect: CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY),
+                needsMoreCoverage: highlightedObjectIDs.contains(object.id)
+            )
+        }
     }
 
     // MARK: - Permission
@@ -406,6 +494,43 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
 
         return cfg
     }
+
+    private func startRoomPlanCaptureIfSupported() {
+        guard RoomCaptureSession.isSupported else {
+            roomPlanObjects = []
+            roomPlanInstructionLabel = nil
+            roomPlanIsRunning = false
+            return
+        }
+        let session = roomCaptureSession ?? RoomCaptureSession(arSession: arSession)
+        session.delegate = self
+        let config = roomCaptureConfiguration ?? RoomCaptureSession.Configuration()
+        roomCaptureSession = session
+        roomCaptureConfiguration = config
+        session.run(configuration: config)
+        roomPlanIsRunning = true
+    }
+
+    private func stopRoomPlanCapture() {
+        roomCaptureSession?.stop(pauseARSession: false)
+        roomPlanIsRunning = false
+    }
+
+    private func objectWorldCorners(for object: RoomPlanDetectedObject) -> [SIMD3<Float>] {
+        let hx = object.dimensions.x * 0.5
+        let hy = object.dimensions.y * 0.5
+        let hz = object.dimensions.z * 0.5
+        let localCorners: [SIMD3<Float>] = [
+            SIMD3(-hx, -hy, -hz), SIMD3(hx, -hy, -hz),
+            SIMD3(-hx, hy, -hz), SIMD3(hx, hy, -hz),
+            SIMD3(-hx, -hy, hz), SIMD3(hx, -hy, hz),
+            SIMD3(-hx, hy, hz), SIMD3(hx, hy, hz)
+        ]
+        return localCorners.map { local in
+            let world = simd_mul(object.transform, SIMD4<Float>(local.x, local.y, local.z, 1))
+            return SIMD3<Float>(world.x, world.y, world.z)
+        }
+    }
 }
 
 // MARK: - ARSessionDelegate
@@ -437,6 +562,98 @@ extension ARCaptureCoordinator: ARSessionDelegate {
     }
 }
 
+extension ARCaptureCoordinator: RoomCaptureSessionDelegate {
+    nonisolated func captureSession(
+        _ session: RoomCaptureSession,
+        didStartWith configuration: RoomCaptureSession.Configuration
+    ) {
+        Task { @MainActor [weak self] in
+            self?.roomPlanIsRunning = true
+            self?.roomCaptureConfiguration = configuration
+        }
+    }
+
+    nonisolated func captureSession(_ session: RoomCaptureSession, didUpdate room: CapturedRoom) {
+        Task { @MainActor [weak self] in
+            self?.publishRoomPlan(room: room)
+        }
+    }
+
+    nonisolated func captureSession(_ session: RoomCaptureSession, didAdd room: CapturedRoom) {
+        Task { @MainActor [weak self] in
+            self?.publishRoomPlan(room: room)
+        }
+    }
+
+    nonisolated func captureSession(_ session: RoomCaptureSession, didChange room: CapturedRoom) {
+        Task { @MainActor [weak self] in
+            self?.publishRoomPlan(room: room)
+        }
+    }
+
+    nonisolated func captureSession(_ session: RoomCaptureSession, didRemove room: CapturedRoom) {
+        Task { @MainActor [weak self] in
+            self?.publishRoomPlan(room: room)
+        }
+    }
+
+    nonisolated func captureSession(
+        _ session: RoomCaptureSession,
+        didProvide instruction: RoomCaptureSession.Instruction
+    ) {
+        Task { @MainActor [weak self] in
+            self?.roomPlanInstructionLabel = self?.humanReadableRoomPlanInstruction(instruction)
+        }
+    }
+
+    nonisolated func captureSession(
+        _ session: RoomCaptureSession,
+        didEndWith data: CapturedRoomData,
+        error: (any Error)?
+    ) {
+        Task { @MainActor [weak self] in
+            if let error {
+                self?.roomPlanInstructionLabel = "RoomPlan paused: \(error.localizedDescription)"
+            }
+            self?.roomPlanIsRunning = false
+        }
+    }
+}
+
+@available(iOS 16.0, *)
+@MainActor
+extension ARCaptureCoordinator {
+    private func publishRoomPlan(room: CapturedRoom) {
+        roomPlanObjects = room.objects.map { object in
+            RoomPlanDetectedObject(
+                id: object.identifier,
+                label: humanReadableRoomPlanCategory(object.category),
+                transform: object.transform,
+                dimensions: object.dimensions,
+                confidenceLabel: String(describing: object.confidence)
+            )
+        }
+    }
+
+    private func humanReadableRoomPlanCategory(_ category: CapturedRoom.Object.Category) -> String {
+        let raw = String(describing: category)
+        if raw.contains(".") {
+            return raw.split(separator: ".").last.map(String.init) ?? raw
+        }
+        return raw
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "storage", with: "storage")
+    }
+
+    private func humanReadableRoomPlanInstruction(_ instruction: RoomCaptureSession.Instruction) -> String {
+        let raw = String(describing: instruction)
+        if raw.contains(".") {
+            return raw.split(separator: ".").last.map(String.init) ?? raw
+        }
+        return raw
+    }
+}
+
 // MARK: - Per-frame pipeline
 
 @MainActor
@@ -452,6 +669,9 @@ extension ARCaptureCoordinator {
 
         totalFramesObserved += 1
         loopDetector.observe(frame: frame)
+        if recordingStartCameraTransform == nil {
+            recordingStartCameraTransform = frame.camera.transform
+        }
 
         // Compute the wall-clock offset once on the first observed frame.
         // ARFrame.timestamp is mach-time seconds since system boot, so we

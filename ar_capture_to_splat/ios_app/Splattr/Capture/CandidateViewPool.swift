@@ -335,4 +335,53 @@ struct CandidateViewSnapshot {
     let frames: [CandidateViewPool.Frame]
     let thumbnailWidth: Int
     let thumbnailHeight: Int
+
+    func image(for frame: CandidateViewPool.Frame) -> UIImage? {
+        image(textureIndex: frame.textureIndex)
+    }
+
+    func image(textureIndex: Int) -> UIImage? {
+        guard textureIndex >= 0,
+              textureIndex < textureArray.arrayLength
+        else {
+            return nil
+        }
+
+        let w = thumbnailWidth
+        let h = thumbnailHeight
+        let bytesPerRow = w * 4
+        let bytesPerImage = bytesPerRow * h
+        var bytes = [UInt8](repeating: 0, count: bytesPerImage)
+        let region = MTLRegionMake2D(0, 0, w, h)
+
+        textureArray.getBytes(
+            &bytes,
+            bytesPerRow: bytesPerRow,
+            bytesPerImage: bytesPerImage,
+            from: region,
+            mipmapLevel: 0,
+            slice: textureIndex
+        )
+
+        let cs = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo: UInt32 =
+            CGBitmapInfo.byteOrder32Little.rawValue |
+            CGImageAlphaInfo.premultipliedFirst.rawValue
+
+        guard let provider = CGDataProvider(
+            data: NSData(bytes: bytes, length: bytesPerImage)
+        ) else { return nil }
+        guard let cgImage = CGImage(
+            width: w, height: h,
+            bitsPerComponent: 8, bitsPerPixel: 32,
+            bytesPerRow: bytesPerRow,
+            space: cs,
+            bitmapInfo: CGBitmapInfo(rawValue: bitmapInfo),
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: true,
+            intent: .defaultIntent
+        ) else { return nil }
+        return UIImage(cgImage: cgImage)
+    }
 }

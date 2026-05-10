@@ -67,7 +67,33 @@ enum AnchorColorBalance {
     static func balanceAnchorTextures(
         snapshots: [TexturedMeshRenderer.ExplorerSnapshot]
     ) -> [UIImage] {
+        let firstImages = snapshots.compactMap { $0.blendViews.first?.textureImage }
+        guard firstImages.count == snapshots.count else {
+            return snapshots.compactMap { $0.blendViews.first?.textureImage }
+        }
+        return balanceImages(firstImages)
+    }
+
+    /// G4 — apply the same global color normalization to every retained
+    /// top-K blend view, then regroup by anchor so the explorer can build
+    /// a multi-view layer stack without reintroducing cross-anchor seams.
+    static func balanceBlendTextures(
+        snapshots: [TexturedMeshRenderer.ExplorerSnapshot]
+    ) -> [[UIImage]] {
         guard !snapshots.isEmpty else { return [] }
+        let counts = snapshots.map { $0.blendViews.count }
+        let flat = snapshots.flatMap { $0.blendViews.map(\.textureImage) }
+        let balancedFlat = balanceImages(flat)
+        var cursor = 0
+        return counts.map { count in
+            let next = Array(balancedFlat[cursor..<(cursor + count)])
+            cursor += count
+            return next
+        }
+    }
+
+    private static func balanceImages(_ images: [UIImage]) -> [UIImage] {
+        guard !images.isEmpty else { return [] }
 
         // CIContext shared across all per-anchor work. Hardware-rendered
         // (Metal) on iPhone — `useSoftwareRenderer: false` is the default
@@ -76,9 +102,9 @@ enum AnchorColorBalance {
 
         // ── 1. mean RGB per anchor ─────────────────────────────────────
         var means: [SIMD3<Float>] = []
-        means.reserveCapacity(snapshots.count)
-        for snap in snapshots {
-            means.append(meanRGB(of: snap.textureImage, ciContext: ciContext))
+        means.reserveCapacity(images.count)
+        for image in images {
+            means.append(meanRGB(of: image, ciContext: ciContext))
         }
 
         // ── 2. per-channel median target ──────────────────────────────
@@ -107,25 +133,25 @@ enum AnchorColorBalance {
 
         // ── 4. apply gains (skip near-identity gains) ──────────────────
         var result: [UIImage] = []
-        result.reserveCapacity(snapshots.count)
-        for (i, snap) in snapshots.enumerated() {
+        result.reserveCapacity(images.count)
+        for (i, image) in images.enumerated() {
             let g = gains[i]
             // Skip if all three channels are within 5% of 1.0.
             if abs(g.x - 1) < 0.05 &&
                abs(g.y - 1) < 0.05 &&
                abs(g.z - 1) < 0.05 {
-                result.append(snap.textureImage)
+                result.append(image)
                 continue
             }
             if let balanced = applyGain(g,
-                                         to: snap.textureImage,
+                                         to: image,
                                          ciContext: ciContext) {
                 result.append(balanced)
             } else {
                 // Fall back to the original — applying a no-op is better
                 // than dropping the anchor's color entirely on a render
                 // failure.
-                result.append(snap.textureImage)
+                result.append(image)
             }
         }
         return result

@@ -17,6 +17,7 @@ CLI usage:
 """
 from __future__ import annotations
 
+import builtins
 import json
 import subprocess
 import sys
@@ -35,6 +36,48 @@ from brush_packaging_layer.brush_config     import (                     # noqa:
     build_brush_cmd,
     quality_preset_menu,
 )
+
+
+_PRINT_PATCHED = False
+
+
+def _sanitize_console_text(text: str) -> str:
+    return (
+        text.replace("━", "-")
+            .replace("═", "=")
+            .replace("✓", "[OK]")
+            .replace("✗", "[X]")
+            .replace("→", "->")
+            .replace("…", "...")
+            .replace("≥", ">=")
+            .replace("≤", "<=")
+            .replace("–", "-")
+            .replace("—", "-")
+    )
+
+
+def _configure_stdio() -> None:
+    """Make console output safe on Windows SSH sessions."""
+    global _PRINT_PATCHED
+
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream is not None and hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+    if _PRINT_PATCHED:
+        return
+
+    orig_print = builtins.print
+
+    def safe_print(*args, **kwargs):
+        safe_args = [
+            _sanitize_console_text(arg) if isinstance(arg, str) else arg
+            for arg in args
+        ]
+        return orig_print(*safe_args, **kwargs)
+
+    builtins.print = safe_print
+    _PRINT_PATCHED = True
 
 
 def run_layer5(
@@ -245,6 +288,8 @@ def _write_meta(meta_dir: Path, data: dict) -> None:
 
 def main() -> None:
     import argparse
+
+    _configure_stdio()
 
     parser = argparse.ArgumentParser(description="Layer 5: Brush packaging + training wrapper.")
     parser.add_argument("--run-dir",    type=Path, required=True, help="Pipeline run directory.")
