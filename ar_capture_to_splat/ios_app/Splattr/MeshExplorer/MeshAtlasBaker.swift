@@ -167,6 +167,19 @@ enum MeshAtlasBaker {
         }
         let device = candidateViews.device
         let tStart = CFAbsoluteTimeGetCurrent()
+        DebugLog.shared.info(
+            "bake",
+            "start: anchors=\(snapshots.count) " +
+            "candidateViews=\(candidateViews.frames.count) " +
+            "thumb=\(candidateViews.thumbnailWidth)×\(candidateViews.thumbnailHeight)"
+        )
+        // Dump a representative candidate slice up-front so we can
+        // verify CandidateViewPool actually fed real pixels into the
+        // texture array (vs. zero-filled by a silent blit no-op). One
+        // is enough — they're all uploaded via the same code path.
+        ArtifactDumper.dumpTextureSlice(
+            candidateViews.textureArray, slice: 0,
+            as: "candidate_slice_0_preflight")
 
         // Compile both Metal kernels ONCE up front (cached for the rest
         // of the bake). The bake kernel is otherwise recompiled per
@@ -468,6 +481,34 @@ enum MeshAtlasBaker {
         // CGImage with explicit sRGB color space, wrap as UIImage.
         guard let atlasImage = mtlTextureToUIImage(atlas) else {
             throw MeshAtlasBakerError.textureAllocationFailed
+        }
+
+        // Instrumentation: dump the atlas PNG + compute brightness stats.
+        // The atlas PNG is the SINGLE artifact that disambiguates "kernel
+        // wrote color" from "kernel hit fallback grey" — open it on Mac
+        // and the answer is visible without running the bake again.
+        let atlasTag = "atlas_offset_\(plan.triangleOffset)_size_\(atlasSize)"
+        ArtifactDumper.dumpUIImage(atlasImage, as: atlasTag)
+        if let stats = BakeDiagnostics.atlasBrightnessStats(atlasImage) {
+            DebugLog.shared.info(
+                "bake",
+                "atlas \(atlasTag): mean=(" +
+                "\(String(format: "%.2f", stats.meanR))," +
+                "\(String(format: "%.2f", stats.meanG))," +
+                "\(String(format: "%.2f", stats.meanB))) " +
+                "grey-fallback=\(String(format: "%.1f%%", stats.greyFallbackFraction * 100))"
+            )
+            ArtifactDumper.dumpText(stats.description,
+                                     as: "\(atlasTag)_brightness")
+            // Push the worst (highest grey-fallback) seen so far into
+            // the HUD so the user sees a live signal during a real bake.
+            Task { @MainActor in
+                let cur = BakeMetrics.shared.lastAtlasGreyFraction
+                if cur < 0 || stats.greyFallbackFraction > cur {
+                    BakeMetrics.shared.lastAtlasGreyFraction =
+                        stats.greyFallbackFraction
+                }
+            }
         }
 
         return BakedChunk(
@@ -924,11 +965,11 @@ private func selectBestViewsOnGPU(
         threadsPerThreadgroup: MTLSize(width: groupSize, height: 1, depth: 1)
     )
     enc.endEncoding()
-    cmd.commit()
-    cmd.waitUntilCompleted()
-    if let err = cmd.error {
-        NSLog("[MeshAtlasBaker] selectBestView dispatch failed: \(err)")
-    }
+    // commitAndCheck logs cmd.error + gpu/wall timing to DebugLog.shared
+    // — replaces the bare NSLog and surfaces silent Metal failures
+    // (e.g. the .shaderRead-on-blit-destination class of bug).
+    cmd.commitAndCheck(tag: "bake",
+                       label: "selectBestView (\(triangleCount) tris × \(views.count) views)")
 
     // Copy out the chosen indices.
     var chosen = [UInt16](repeating: .max, count: triangleCount)
@@ -936,6 +977,28 @@ private func selectBestViewsOnGPU(
         to: UInt16.self, capacity: triangleCount
     )
     for i in 0..<triangleCount { chosen[i] = chosenPtr[i] }
+
+    // Instrumentation — the SINGLE diagnostic that tells us whether
+    // the kernel actually picked real views or fell back to the
+    // 0xFFFF sentinel. If sentinelFraction > 0.5, the facing/distance
+    // floors at lines 812/822 are still too strict — relax them.
+    let hist = BakeDiagnostics.chosenViewsHistogram(
+        chosen, viewCountHint: views.count)
+    DebugLog.shared.info(
+        "bake",
+        "chosen views: " +
+        "real=\(String(format: "%.1f%%", hist.realFraction * 100)) " +
+        "sentinel=\(hist.sentinelCount)/\(hist.total) " +
+        "maxIdx=\(hist.maxViewIndex)"
+    )
+    ArtifactDumper.dumpText(hist.description, as: "chosen_views_report")
+    // Full per-triangle dump too — opens in Mac text editor for grep.
+    ArtifactDumper.dumpUInt16Buffer(
+        chosenBuf, count: triangleCount, as: "chosen_views_raw")
+    Task { @MainActor in
+        BakeMetrics.shared.lastChosenSentinelFraction = hist.sentinelFraction
+    }
+
     return chosen
 }
 
@@ -1152,6 +1215,7 @@ private func bakeAtlasChunked(
     var subStart = 0
     while subStart < chunkTriangleCount {
         let subLen = min(subChunkSize, chunkTriangleCount - subStart)
+        let subStartCFA = CFAbsoluteTimeGetCurrent()
 
         var params = BakeParams(
             atlasSize: UInt32(atlasSize),
@@ -1188,14 +1252,18 @@ private func bakeAtlasChunked(
             threadsPerThreadgroup: MTLSize(width: tgX, height: tgY, depth: tgZ)
         )
         enc.endEncoding()
-        cmd.commit()
-        // KEY: waitUntilCompleted between sub-chunks so the system UI
-        // compositor gets a slice of GPU time. Without this, a single
-        // mega-dispatch holds the GPU and the phone visually freezes.
-        cmd.waitUntilCompleted()
-        if let err = cmd.error {
-            NSLog("[MeshAtlasBaker] bakeAtlas sub-chunk \(subStart) failed: \(err)")
-        }
+        // KEY: commit + waitUntilCompleted between sub-chunks so the
+        // system UI compositor gets a slice of GPU time. commitAndCheck
+        // wraps both + logs cmd.error if it materializes — silent Metal
+        // failures (`.shaderRead`-on-blit-dest class) surface
+        // immediately instead of producing all-zero output.
+        cmd.commitAndCheck(
+            tag: "bake",
+            label: "bakeAtlas sub-chunk [\(subStart)..\(subStart + subLen))"
+        )
+        let subEndCFA = CFAbsoluteTimeGetCurrent()
+        let subMs = (subEndCFA - subStartCFA) * 1000.0
+        Task { @MainActor in BakeMetrics.shared.lastSubChunkMs = subMs }
 
         subStart += subLen
         onProgress(Double(subStart) / Double(chunkTriangleCount))
