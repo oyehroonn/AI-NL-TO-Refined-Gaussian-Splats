@@ -542,3 +542,169 @@ No hidden global state; no observer chains.
 ---
 
 *Last updated: see `git log -- ar_capture_to_splat/IMPLEMENTATION_PLAN.md` for revision history.*
+
+---
+
+## Section 7 — Gold Tier Perfection Plan (added 2026-05-14)
+
+The free Gold tier ships today using Phase 1 per-anchor UIImage textures, but
+the live mesh still shows blacked-out / distorted patches because (a) anchors
+only ever get ONE snapshot — whatever the camera happened to see at
+add-time — and (b) the Phase 2 atlas bake that would re-project the best of
+several candidate views per face was parked after producing grayscale across
+seven fix attempts (`project_phase2_atlas_parked.md`).
+
+Goal: make the live 3D environment look "just like the video itself" — no
+patches the user can point to and say "that's wrong."
+
+### Why the bake produced grayscale — three plausible causes, never verified
+
+1. **Best-view kernel rejected all views.** `MeshAtlasBaker.swift:794-830`
+   has comments FIX A / FIX B / FIX C — FIX B says "that was the root cause
+   of the all-grey atlas" (winding-inconsistent normals, replaced with a
+   geometric facing test). Plausibly the actual fix.
+2. **Candidate texture array was zero-filled.** `feedback_metal_blit_dest_usage.md`
+   documents the `.shaderRead`-only blit destination bug → silent no-op blit
+   → all-black sample. Fixed in `CandidateViewPool`, but never verified
+   end-to-end.
+3. **MTLTexture → `SCNMaterialProperty.contents` silent grayscale.**
+   `feedback_scnmaterial_uiimage_path.md` documents the SCN content boundary
+   that silently renders flat grey. Fixed by `mtlTextureToUIImage` at
+   `MeshAtlasBaker.swift:531`, but never verified.
+
+All three fixes are in tree. We don't know which was load-bearing because
+we never had on-phone instrumentation. **Without a debug surface, the next
+attempt is shot-in-the-dark #8.**
+
+### Compute reality check
+
+The bake does **not** hang the iPhone 15 Pro Max. `bakeAtlasChunked`
+(`MeshAtlasBaker.swift:1084-1203`) already splits work into 4,096-triangle
+sub-dispatches with `commit + waitUntilCompleted` between each — proven at
+60 fps mid-bake on A15 (`feedback_metal_compute_yielding.md`). A17 Pro has
+more headroom. Memory profile (header comment): ~144 MB + 64 MB per
+already-baked atlas; a 200K-triangle room is ~336 MB peak — fine on 8 GB.
+The historical "phone froze" report was the `concavePolyhedron` physics
+body on the fine mesh, already fixed via 8 cm coarse weld
+(`feedback_concave_polyhedron_size.md`, `MeshAtlasBaker.swift:275`).
+
+### Plan A — Debug tool first, then re-enable atlas bake (~4-5 days)
+
+**Phase A1 — Debug tool (~2 days)**
+A new `Splattr/Debug/` module:
+
+- **Metal Validation Layer ON.** Scheme → Diagnostics → Metal API
+  Validation = Extended. Catches `.shaderRead`-on-blit-destination class
+  bugs instantly. Single setting, biggest single win.
+- **`DebugLog.swift`** — singleton logger mirroring every `log(...)` to
+  both NSLog and `tmp/splattr_debug_<session>.log`. Tagged levels:
+  `.info / .warn / .error / .gpu / .thermal`. "Share Debug Log" button uses
+  `UIActivityViewController` so the log AirDrops to Mac in 3 taps.
+- **`MetalDebug.swift`** — `MTLCommandBuffer.commitAndCheck(tag:)`
+  extension that does commit + waitUntilCompleted + logs `cmd.error` +
+  `gpuStartTime / gpuEndTime`. Universal across every dispatch.
+- **`ArtifactDumper.swift`** — `dumpTexture(_:as:)`, `dumpBuffer(_:as:)`.
+  During a bake we dump: each candidate texture array slice (proves
+  CandidateViewPool fed real pixels in), the final atlas (proves the
+  kernel wrote color), the `chosenViews` UInt16 buffer (proves best-view
+  selection picked real views). All to `tmp/<session>/`.
+- **`BakeDiagnostics.swift`** — `chosenViewsHistogram(_:)` returns the
+  fraction of triangles that got a real view vs `0xFFFF` sentinel.
+  `atlasBrightnessStats(_:)` returns mean / std / min / max — if mean
+  ≈ 0.45 ± 0.001, every pixel hit the fallback grey path. **These two
+  numbers tell us in seconds which of FIX A/B/C was load-bearing.**
+- **`DebugHUD.swift`** — SwiftUI overlay, hidden long-press on JoinView's
+  connected pill to enable. Live counters: thermal state, GPU active %
+  (`MTLCounterSampleBuffer` on iOS 17+), current bake phase, sub-chunk
+  timings, candidate views accepted, anchors observed, free memory
+  (`os_proc_available_memory()`).
+- **`ThermalObserver.swift`** — `ProcessInfo.thermalState` +
+  `.thermalStateDidChangeNotification`. Logged on every change.
+- **`SyntheticBakeScene.swift`** — "Run Test Bake" debug action. Feeds a
+  synthetic 3-triangle scene + 1 hand-coded checkerboard view to
+  `MeshAtlasBaker.bake`. Atlas should come out as checkerboard. **If it
+  doesn't, problem is 100 % in the bake** — eliminates ARKit /
+  CandidateViewPool as variables.
+
+**Phase A2 — Re-enable the bake (~2-3 days, given the tool exists)**
+
+1. Run synthetic test → atlas must be checkerboard. If not, fix until it
+   is. Likely small.
+2. Run on real capture → check `chosenViewsHistogram`. Expected: ≥ 90 %
+   real, ≤ 10 % sentinel. If worse, relax `facing > 0.05` and `dist > 0.05`
+   floors at `MeshAtlasBaker.swift:812,822`.
+3. Dump first atlas PNG → open on Mac. Should look like UV-unwrapped room
+   coloring. If grey, kernel never sampled. If room-colored, kernel is
+   good — problem is now SCN side.
+4. If atlas PNG looks correct but on-screen render is grey, the boundary
+   is `mtlTextureToUIImage` or the SCN material setup in
+   `MeshExplorerView`. Bypass with a direct PNG load to isolate.
+5. Re-enable the bake call in `CaptureView.startExploration` (currently
+   bypassed per `project_phase2_atlas_parked.md`). Keep the Phase 1
+   per-anchor path as fallback if
+   `BakeStats.trianglesWithView / triangleCount < 0.5`.
+
+### Plan B — Session-end re-texture stop-gap (~2 days, low risk)
+
+If the bake never works, this still removes ~60-80 % of black patches.
+
+**New file: `Splattr/MeshExplorer/AnchorRetexturer.swift`**
+
+Algorithm per anchor:
+- Weakness score on `snap.textureImage`: average L + std-dev. Weak if
+  `mean < 0.15` (dark) or `std < 0.05` (flat — never had real photo).
+- Compute world-space centroid of the anchor's triangles.
+- Iterate CandidateViewPool frames (≤ 32 per session, fast):
+  - Project anchor centroids through view × projection. Count how many
+    fall inside NDC `[-0.9, 0.9]` AND
+    `dot(camera_forward, dir_to_centroid) > 0.2`.
+  - Score by `coverage_count × sharpness / distance`.
+- If best candidate scores > 1.3× current, build a fresh UIImage by
+  sampling that candidate's image with planar projection (same `CIImage`
+  math `TexturedMeshRenderer` already uses for first-time assignment).
+  Replace `snap.textureImage`.
+
+**Wiring**:
+- `MeshExplorerView.ExplorerSceneKitView.buildScene`: call
+  `AnchorRetexturer.retexture(...)` before the per-anchor SCN node loop.
+- `CaptureView.startExploration`: pass `CandidateViewPool.snapshot()`
+  alongside `explorerSnapshots`.
+
+**Won't fix**: anchors literally no view ever saw (no algorithm can);
+per-face MVS sharpness (still whole-anchor textures, just better ones);
+inter-anchor color mismatch (separate dimension — `AnchorColorBalance`).
+
+**Will fix**: anchors ARKit added in the periphery that never got a fresh
+snapshot when the user finally aimed at them — the ~60-80 % of patches
+the user is complaining about today.
+
+### Recommended sequencing
+
+Single ~4-5 day project: debug tool (days 1-2) → stop-gap (day 3) →
+atlas bake re-enable (days 4-5).
+
+- Stop-gap ships visible improvement to Gold even if the atlas bake
+  never works — demoable in week 1, black patches mostly gone.
+- Atlas bake with the debug tool in hand turns shot-in-the-dark into
+  data-driven: histogram + atlas PNG dump tell us in minutes which fix
+  was load-bearing and what (if anything) still fails.
+- Behind tier toggle so Gold falls back to stop-gap if bake's
+  `trianglesWithView` ratio is low.
+
+### Files index (Plan A1, currently being built)
+```
+ios_app/Splattr/Debug/
+  DebugMode.swift             — central enable flag + UserDefaults
+  DebugLog.swift              — file-backed structured logger
+  MetalDebug.swift            — MTLCommandBuffer.commitAndCheck extension
+  ArtifactDumper.swift        — MTLTexture / MTLBuffer → tmp dir PNGs / hex
+  BakeDiagnostics.swift       — chosenViews histogram + atlas stats
+  ThermalObserver.swift       — ProcessInfo.thermalState observer
+  DebugHUD.swift              — SwiftUI live overlay
+  SyntheticBakeScene.swift    — checkerboard-scene bake test
+```
+Wiring touches:
+- `AppState/CaptureSettings.swift` — debug-mode getter / setter
+- `UI/JoinView.swift` — hidden long-press enables debug mode
+- `UI/CaptureView.swift` — overlay HUD when enabled + "Share Debug Log"
+
