@@ -418,7 +418,7 @@ private struct ExplorerSceneKitView: UIViewRepresentable {
 
         // No index buffer — UNSHARED verts in draw order. UInt32 indices
         // wrapping `0...vertexCount-1` would just duplicate the layout.
-        var indices = [UInt32](0..<UInt32(vertexCount))
+        let indices = [UInt32](0..<UInt32(vertexCount))
         let indexData = indices.withUnsafeBufferPointer { Data(buffer: $0) }
         let element = SCNGeometryElement(
             data: indexData,

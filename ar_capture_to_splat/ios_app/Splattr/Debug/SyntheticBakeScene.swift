@@ -33,9 +33,11 @@ enum SyntheticBakeScene {
         case bakeThrew(Error)
     }
 
-    /// Run end-to-end. Safe to call from the main actor — the bake itself
-    /// runs on a background task internally so the caller doesn't block.
-    /// Result is delivered on main.
+    /// Run end-to-end. Must be called from the main actor (BakeMetrics
+    /// is `@MainActor`-isolated and the function mutates it up-front).
+    /// The bake itself runs on a background `Task.detached` internally
+    /// so the caller doesn't block. Result is delivered on main.
+    @MainActor
     static func run(completion: @escaping (Result<String, SyntheticError>) -> Void) {
         guard let device = MTLCreateSystemDefaultDevice() else {
             completion(.failure(.noMetalDevice))
@@ -59,7 +61,13 @@ enum SyntheticBakeScene {
 
             Task.detached(priority: .userInitiated) {
                 do {
-                    BakeMetrics.shared.phase = "synthetic-bake"
+                    // `Task.detached` runs OFF the main actor, but
+                    // BakeMetrics is @MainActor-isolated — hop back
+                    // explicitly for the one-line state update before
+                    // the long-running bake kernel begins.
+                    await MainActor.run {
+                        BakeMetrics.shared.phase = "synthetic-bake"
+                    }
                     let baked = try MeshAtlasBaker.bake(
                         snapshots: snapshots,
                         candidateViews: candidates,
