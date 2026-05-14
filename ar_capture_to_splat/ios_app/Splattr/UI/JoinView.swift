@@ -98,7 +98,51 @@ struct JoinView: View {
             MonoPill(label: "session", value: descriptor.session_id)
             MonoPill(label: "run", value: descriptor.run_id)
             Spacer()
+            debugToggleChip
         }
+    }
+
+    /// Always-visible DEBUG toggle. One tap toggles DebugMode (also
+    /// reachable via long-press on CONNECTED for the hidden / less-
+    /// clutter path). When on, the chip fills amber and the DEBUG
+    /// TOOLS card appears below tipsCard. When on, the atlas bake
+    /// runs during Explore Mesh; when off, the original Phase 1
+    /// per-anchor path is used (this is the gate that controls
+    /// whether the bake gets a chance to run at all).
+    private var debugToggleChip: some View {
+        Button {
+            debugOn.toggle()
+            DebugLog.shared.info(
+                "debugmode",
+                "toggled via chip → \(debugOn ? "ON" : "OFF")"
+            )
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: debugOn ? "ladybug.fill" : "ladybug")
+                    .font(.system(size: 10, weight: .semibold))
+                Text("DBG")
+                    .font(Theme.Font.caption(10)).tracking(1.4)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            .foregroundStyle(
+                debugOn ? Color.black
+                        : Color(red: 0.95, green: 0.78, blue: 0.30)
+            )
+            .background(
+                Capsule().fill(
+                    debugOn
+                    ? Color(red: 0.95, green: 0.78, blue: 0.30)
+                    : Color.clear
+                )
+            )
+            .overlay(
+                Capsule().stroke(
+                    Color(red: 0.95, green: 0.78, blue: 0.30),
+                    lineWidth: 0.8
+                )
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     private var sceneSelector: some View {

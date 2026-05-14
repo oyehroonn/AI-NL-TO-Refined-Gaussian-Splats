@@ -510,10 +510,24 @@ private struct ExplorerSceneKitView: UIViewRepresentable {
 
 // ── First-person controller ──────────────────────────────────────────────────
 
+/// Walk = dynamic capsule, gravity on, collisions on, jump available.
+/// Fly  = kinematic capsule, gravity off, no collisions, joystick moves
+///        the player in 3D (forward is wherever the camera is pointed,
+///        including pitch). The explorer presents in FLY by default so a
+///        bad spawn (ARKit's stray below-floor anchors, or an AABB whose
+///        centre lands inside a wall) can never trap or drop the user —
+///        they just float wherever they want, then can tap WALK to feel
+///        the room.
+enum MovementMode { case fly, walk }
+
 @MainActor
 final class FirstPersonController: ObservableObject {
 
     @Published private(set) var cameraWorldPosition: SIMD3<Float> = SIMD3(0, 1.6, 0)
+    /// Current locomotion mode. Reactive — MeshExplorerView reads this
+    /// to decide which HUD button (FLY/WALK toggle) state to render and
+    /// whether to show the jump button.
+    @Published private(set) var mode: MovementMode = .fly
 
     private(set) var playerNode: SCNNode = SCNNode()
     private(set) var cameraNode: SCNNode = SCNNode()
@@ -534,6 +548,10 @@ final class FirstPersonController: ObservableObject {
     /// Tunable.
     private let walkSpeed: Float = 2.4   // m/s — brisk walk
     private let jumpVelocity: Float = 4.5
+    /// Fly-mode horizontal speed multiplier. Slightly faster than walk
+    /// so inspecting ceilings + corners doesn't feel sluggish; not so
+    /// fast that single-finger drags overshoot a room.
+    private let flySpeedMultiplier: Float = 1.5
 
     init() {
         cameraNode.camera = SCNCamera()
@@ -573,10 +591,30 @@ final class FirstPersonController: ObservableObject {
         // Otherwise SCNView renders frame zero with the player still at
         // origin (often outside the captured AABB → camera pointing at
         // empty space → black).
+        //
+        // Spawn = AABB MID-HEIGHT centre (was: minY + 1.6m floor-stand).
+        // The floor-stand heuristic assumed the lowest mesh vertex was
+        // the actual floor — false when ARKit drops stray below-floor
+        // anchors during the first 1-2s of tracking. Mid-height keeps
+        // the player inside the volume on every scan; the FLY default
+        // (no gravity, no collision) means no "falling through" even
+        // if some captured geometry is below where they spawn.
         let center = (sceneBounds.minBound + sceneBounds.maxBound) * 0.5
-        let spawn = SIMD3<Float>(center.x, sceneBounds.minBound.y + 1.6, center.z)
+        let spawn = SIMD3<Float>(center.x, center.y, center.z)
         playerNode.simdPosition = spawn
         playerNode.physicsBody?.velocity = SCNVector3(0, 0, 0)
+
+        // Reset look orientation on every present so a prior session's
+        // pitch/yaw don't leak in. Camera looks down world -Z by default.
+        lookYaw = 0
+        lookPitch = 0
+        applyOrientation()
+
+        // Force FLY on every present. No-clip + no-gravity guarantees
+        // the user sees their environment instead of falling out of it.
+        // They can tap WALK in the HUD to engage physics.
+        mode = .fly
+        applyMode()
 
         sceneView.pointOfView = cameraNode
 
@@ -587,6 +625,39 @@ final class FirstPersonController: ObservableObject {
         sceneView.prepare([scene]) { _ in }
 
         startMovementLoop()
+    }
+
+    /// Public toggle — called from MeshExplorerView's FLY/WALK button.
+    func setMode(_ new: MovementMode) {
+        guard new != mode else { return }
+        mode = new
+        applyMode()
+    }
+
+    /// Reconfigure the physics body to match the current mode.
+    ///
+    /// FLY:  type = .kinematic → physics no longer applies forces or
+    ///       collisions to the body. We position-drive playerNode in
+    ///       displayTick. resetTransform isn't needed because SCNScene's
+    ///       physics world treats kinematic nodes as authoritative.
+    /// WALK: type = .dynamic → gravity + collisions re-engage. Zero out
+    ///       velocity so any prior kinematic drag doesn't translate to a
+    ///       sudden launch. Call resetTransform so the physics simulation
+    ///       takes the current node transform as the new origin instead
+    ///       of trying to reconcile a stale cached pose.
+    private func applyMode() {
+        guard let body = playerNode.physicsBody else { return }
+        body.velocity = SCNVector3(0, 0, 0)
+        switch mode {
+        case .fly:
+            body.type = .kinematic
+            body.isAffectedByGravity = false
+        case .walk:
+            body.type = .dynamic
+            body.isAffectedByGravity = true
+            body.resetTransform()
+        }
+        pendingJump = false   // fly→walk shouldn't fire a stale jump
     }
 
     func startMovementLoop() {
@@ -636,29 +707,61 @@ final class FirstPersonController: ObservableObject {
         let now = CACurrentMediaTime()
         let dt = max(0.001, min(0.05, Float(now - lastTickAt)))
         lastTickAt = now
-        _ = dt  // velocity-based; SceneKit advances the simulation itself.
 
-        // Compute desired horizontal velocity from joystick + camera yaw.
-        // Camera-space forward is -Z; yaw is around +Y.
+        switch mode {
+        case .fly:
+            integrateFly(dt: dt)
+        case .walk:
+            integrateWalk()
+        }
+
+        // Mirror player position into our publisher (for the bottom-bar
+        // POS readout). Reads cameraNode.simdWorldPosition either way —
+        // SceneKit composes parent transforms automatically.
+        cameraWorldPosition = cameraNode.simdWorldPosition
+    }
+
+    /// Walk-mode integration. Existing semantics:
+    /// joystick → horizontal velocity (XZ only, ignores pitch); gravity
+    /// supplies Y unless a jump is pending. Capsule's dynamic body
+    /// handles collision with the room's static concavePolyhedron body.
+    private func integrateWalk() {
+        // Camera-space forward is -Z; yaw is around +Y. Pitch deliberately
+        // ignored — walking-forward shouldn't move you up/down.
         let forward = SIMD3<Float>(-sin(lookYaw), 0, -cos(lookYaw))
         let right = SIMD3<Float>(cos(lookYaw), 0, -sin(lookYaw))
         let horiz = (forward * moveInput.y + right * moveInput.x) * walkSpeed
 
-        // Override XZ velocity, leave Y to physics gravity (or jump impulse).
-        if let body = playerNode.physicsBody {
-            let v = body.velocity
-            let vy: Float
-            if pendingJump {
-                vy = jumpVelocity
-                pendingJump = false
-            } else {
-                vy = Float(v.y)
-            }
-            body.velocity = SCNVector3(horiz.x, vy, horiz.z)
+        guard let body = playerNode.physicsBody else { return }
+        let v = body.velocity
+        let vy: Float
+        if pendingJump {
+            vy = jumpVelocity
+            pendingJump = false
+        } else {
+            vy = Float(v.y)
         }
+        body.velocity = SCNVector3(horiz.x, vy, horiz.z)
+    }
 
-        // Mirror player position into our publisher.
-        cameraWorldPosition = cameraNode.simdWorldPosition
+    /// Fly-mode integration. Kinematic body: SCN won't apply forces, so
+    /// we move the player node directly. Movement is camera-relative in
+    /// FULL 3D — looking up + push forward = move up. Strafe is
+    /// horizontal-only (camera's local +X projected onto XZ would feel
+    /// natural in walk; in fly we just use the camera's world +X so a
+    /// rolled camera doesn't strafe weirdly, but we never roll, so it's
+    /// the same vector).
+    private func integrateFly(dt: Float) {
+        // Read camera's world axes from its transform matrix. This is
+        // robust to any composition of yawQ * pitchQ — we don't have to
+        // re-derive trig.
+        let m = cameraNode.simdWorldTransform
+        let forwardCam = -SIMD3<Float>(m.columns.2.x, m.columns.2.y, m.columns.2.z)
+        let rightCam   =  SIMD3<Float>(m.columns.0.x, m.columns.0.y, m.columns.0.z)
+        let speed = walkSpeed * flySpeedMultiplier
+        let delta = (forwardCam * moveInput.y + rightCam * moveInput.x) * speed * dt
+        // Direct position drive — kinematic body honours the new pose.
+        playerNode.simdPosition += delta
     }
 
     private func applyOrientation() {

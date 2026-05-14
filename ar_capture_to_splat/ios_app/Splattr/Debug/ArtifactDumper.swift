@@ -47,14 +47,22 @@ enum ArtifactDumper {
     // MARK: - Session dir
 
     /// One directory per app launch — keeps a bug repro's dumps grouped.
+    /// Lives under Documents/ so iOS Files app + macOS Finder's "Files
+    /// Shared by iPhone Apps" surface it directly. Pair with the
+    /// `UIFileSharingEnabled` + `LSSupportsOpeningDocumentsInPlace`
+    /// flags in Info.plist. tmp/ would be invisible to the user and
+    /// purged by iOS on low-storage events.
     static let sessionDirectory: URL = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime,
                                     .withFractionalSeconds]
         let stamp = formatter.string(from: Date())
             .replacingOccurrences(of: ":", with: "-")
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("splattr_artifacts", isDirectory: true)
+        let docs = FileManager.default.urls(
+            for: .documentDirectory, in: .userDomainMask
+        ).first ?? FileManager.default.temporaryDirectory
+        let root = docs
+            .appendingPathComponent("splattr-debug-artifacts", isDirectory: true)
             .appendingPathComponent(stamp, isDirectory: true)
         try? FileManager.default.createDirectory(
             at: root, withIntermediateDirectories: true)

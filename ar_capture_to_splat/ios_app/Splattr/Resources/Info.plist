@@ -73,5 +73,16 @@
 	<string>Splattr uses the camera to capture frames of the scene you're scanning.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Splattr can save a thumbnail of your capture to Photos.</string>
+
+	<!-- Expose the app's Documents/ directory in the iOS Files app + on
+	     macOS via Finder's "Files Shared by iPhone Apps" surface. The
+	     Splattr/Debug subsystem writes its log file + artifact dumps
+	     to Documents/splattr-debug-logs/ and Documents/splattr-debug-artifacts/
+	     so a dev can AirDrop them to a Mac in three taps without needing
+	     Xcode device-container download or the in-app Share Sheet. -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 </dict>
 </plist>

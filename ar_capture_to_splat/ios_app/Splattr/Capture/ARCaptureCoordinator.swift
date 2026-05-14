@@ -169,12 +169,30 @@ final class ARCaptureCoordinator: NSObject, ObservableObject {
         arSession.delegateQueue = nil  // main; cheap because we offload heavy work
         arSession.run(config, options: [.resetTracking, .removeExistingAnchors])
         isRunning = true
+
+        // Always-on capture lifecycle log (fires regardless of DebugMode).
+        // This is the single line a post-mortem starts from — "what
+        // device, what mode, what budget did this run try to hit."
+        DebugLog.shared.info(
+            "capture",
+            "scan START session=\(sessionID) mode=\(policy.scan_mode) " +
+            "frameBudget=\(policy.frame_budget.min)/\(policy.frame_budget.target)/\(policy.frame_budget.max) " +
+            "cadence=\(cadence.rawValue)Hz " +
+            "sceneDepth=\(capability.supportsSceneDepth) " +
+            "sceneReconstruction=\(capability.supportsSceneReconstruction)"
+        )
     }
 
     func stop() {
         guard isRunning else { return }
         isRunning = false
         arSession.pause()
+        DebugLog.shared.info(
+            "capture",
+            "scan STOP frames=\(capturedCount) " +
+            "candidates=\(candidateViewPool?.frames.count ?? 0) " +
+            "coverage=\(String(format: "%.1f%%", coverageFraction * 100))"
+        )
     }
 
     /// Pause the AR session while the post-scan Mesh Explorer is open.

@@ -65,13 +65,25 @@ final class DebugLog {
                                     .withFractionalSeconds]
         self.isoFormatter = formatter
 
+        // Lives under Documents/ (not tmp/) so UIFileSharingEnabled +
+        // LSSupportsOpeningDocumentsInPlace in Info.plist surface it in
+        // the iOS Files app + Finder's "Files Shared by iPhone Apps".
+        // tmp/ is invisible to the user and gets purged by iOS on low-
+        // storage events — bad place to keep an investigation log.
+        let docs = FileManager.default.urls(
+            for: .documentDirectory, in: .userDomainMask
+        ).first ?? FileManager.default.temporaryDirectory
+        let dir = docs.appendingPathComponent("splattr-debug-logs",
+                                               isDirectory: true)
+        try? FileManager.default.createDirectory(
+            at: dir, withIntermediateDirectories: true)
+
         // One log file per process launch — keeps sessions separate so a
         // bug repro can be matched 1:1 to a single file the user shared.
         let stamp = formatter
             .string(from: Date())
             .replacingOccurrences(of: ":", with: "-")
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("splattr_debug_\(stamp).log")
+        let url = dir.appendingPathComponent("splattr_debug_\(stamp).log")
         self.logFileURL = url
 
         FileManager.default.createFile(atPath: url.path, contents: nil)
