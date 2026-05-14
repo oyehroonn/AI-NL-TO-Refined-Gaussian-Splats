@@ -237,6 +237,114 @@ struct JoinView: View {
         }
     }
 
+    // MARK: - Debug card
+    //
+    // Only visible when DebugMode is enabled (long-press the CONNECTED
+    // pill to toggle). Exposes the two debug actions a developer needs
+    // before going into the field:
+    //   - Run Synthetic Bake Test → fires MeshAtlasBaker on a known-good
+    //     3-tri + 1-checkerboard scene; dumps the atlas as PNG.
+    //   - Share Debug Log → AirDrops the current session's
+    //     `tmp/splattr_debug_<stamp>.log` off-device.
+    private var debugCard: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    Text("DEBUG TOOLS")
+                        .font(Theme.Font.caption(11)).tracking(2.0)
+                        .foregroundStyle(Color(red: 0.95, green: 0.78, blue: 0.30))
+                    Spacer()
+                    Text("v1")
+                        .font(Theme.Font.mono(10))
+                        .foregroundStyle(Theme.Color.textMuted)
+                }
+                Text("Long-press the CONNECTED pill to hide.")
+                    .font(Theme.Font.body(12))
+                    .foregroundStyle(Theme.Color.textMuted)
+
+                Button {
+                    runSyntheticBake()
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: syntheticRunning
+                              ? "hourglass" : "wand.and.stars")
+                        Text(syntheticRunning
+                             ? "Running synthetic bake…"
+                             : "Run Synthetic Bake Test")
+                            .font(Theme.Font.body(14).weight(.semibold))
+                    }
+                    .padding(.vertical, 10).padding(.horizontal, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.white.opacity(0.06),
+                                in: RoundedRectangle(cornerRadius: 8))
+                }
+                .disabled(syntheticRunning)
+                .foregroundStyle(Theme.Color.textPrimary)
+
+                Button {
+                    DebugLog.shared.flush()
+                    shareDebugLog()
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "square.and.arrow.up")
+                        Text("Share Debug Log")
+                            .font(Theme.Font.body(14).weight(.semibold))
+                    }
+                    .padding(.vertical, 10).padding(.horizontal, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.white.opacity(0.06),
+                                in: RoundedRectangle(cornerRadius: 8))
+                }
+                .foregroundStyle(Theme.Color.textPrimary)
+
+                if let result = syntheticResult {
+                    Text(result)
+                        .font(Theme.Font.mono(10))
+                        .foregroundStyle(Theme.Color.textPrimary)
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.black.opacity(0.35),
+                                    in: RoundedRectangle(cornerRadius: 6))
+                }
+            }
+        }
+    }
+
+    private func runSyntheticBake() {
+        syntheticRunning = true
+        syntheticResult = nil
+        SyntheticBakeScene.run { result in
+            syntheticRunning = false
+            switch result {
+            case .success(let summary): syntheticResult = summary
+            case .failure(let err):
+                syntheticResult = "FAILED: \(err)"
+                DebugLog.shared.error("synthetic", "\(err)")
+            }
+        }
+    }
+
+    private func shareDebugLog() {
+        let url = DebugLog.shared.logFileURL
+        guard let scene = UIApplication.shared.connectedScenes
+                .first(where: { $0.activationState == .foregroundActive })
+                as? UIWindowScene,
+              let root = scene.keyWindow?.rootViewController else {
+            return
+        }
+        let av = UIActivityViewController(activityItems: [url],
+                                           applicationActivities: nil)
+        av.popoverPresentationController?.sourceView = root.view
+        av.popoverPresentationController?.sourceRect = CGRect(
+            x: root.view.bounds.midX,
+            y: root.view.bounds.midY,
+            width: 0, height: 0
+        )
+        var top = root
+        while let presented = top.presentedViewController { top = presented }
+        top.present(av, animated: true)
+    }
+
     @MainActor
     private func loadTips() async {
         tipsLoading = true

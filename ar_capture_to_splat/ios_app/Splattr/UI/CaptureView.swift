@@ -46,6 +46,15 @@ struct CaptureView: View {
             preview
             scrim
             hud
+            // Debug HUD overlays everything when DebugMode is enabled;
+            // self-hides otherwise. Lives at top-trailing.
+            VStack {
+                HStack {
+                    Spacer()
+                    DebugHUD()
+                }
+                Spacer()
+            }
         }
         .ignoresSafeArea()
         .alert("Capture error",

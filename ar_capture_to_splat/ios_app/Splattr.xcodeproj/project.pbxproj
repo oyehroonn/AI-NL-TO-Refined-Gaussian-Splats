@@ -51,6 +51,14 @@
 		A10000000000000000001033 /* MeshExplorerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B33 /* MeshExplorerView.swift */; };
 		A10000000000000000001034 /* CandidateViewPool.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B34 /* CandidateViewPool.swift */; };
 		A10000000000000000001035 /* MeshAtlasBaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B35 /* MeshAtlasBaker.swift */; };
+		A10000000000000000001036 /* DebugMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B36 /* DebugMode.swift */; };
+		A10000000000000000001037 /* DebugLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B37 /* DebugLog.swift */; };
+		A10000000000000000001038 /* ThermalObserver.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B38 /* ThermalObserver.swift */; };
+		A10000000000000000001039 /* MetalDebug.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B39 /* MetalDebug.swift */; };
+		A1000000000000000000103A /* ArtifactDumper.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B3A /* ArtifactDumper.swift */; };
+		A1000000000000000000103B /* BakeDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B3B /* BakeDiagnostics.swift */; };
+		A1000000000000000000103C /* DebugHUD.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B3C /* DebugHUD.swift */; };
+		A1000000000000000000103D /* SyntheticBakeScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B3D /* SyntheticBakeScene.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -100,6 +108,14 @@
 		A100000000000000000000B33 /* MeshExplorerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshExplorerView.swift; sourceTree = "<group>"; };
 		A100000000000000000000B34 /* CandidateViewPool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CandidateViewPool.swift; sourceTree = "<group>"; };
 		A100000000000000000000B35 /* MeshAtlasBaker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshAtlasBaker.swift; sourceTree = "<group>"; };
+		A100000000000000000000B36 /* DebugMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugMode.swift; sourceTree = "<group>"; };
+		A100000000000000000000B37 /* DebugLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugLog.swift; sourceTree = "<group>"; };
+		A100000000000000000000B38 /* ThermalObserver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThermalObserver.swift; sourceTree = "<group>"; };
+		A100000000000000000000B39 /* MetalDebug.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalDebug.swift; sourceTree = "<group>"; };
+		A100000000000000000000B3A /* ArtifactDumper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactDumper.swift; sourceTree = "<group>"; };
+		A100000000000000000000B3B /* BakeDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BakeDiagnostics.swift; sourceTree = "<group>"; };
+		A100000000000000000000B3C /* DebugHUD.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugHUD.swift; sourceTree = "<group>"; };
+		A100000000000000000000B3D /* SyntheticBakeScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntheticBakeScene.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -132,6 +148,7 @@
 				A1000000000000000000E017 /* CapturePolicy */,
 				A1000000000000000000E018 /* AppState */,
 				A1000000000000000000E019 /* MeshExplorer */,
+				A1000000000000000000E01A /* Debug */,
 				A1000000000000000000E015 /* UI */,
 				A1000000000000000000E016 /* Resources */,
 				A100000000000000000000D0 /* Assets.xcassets */,
@@ -243,6 +260,21 @@
 				A100000000000000000000B35 /* MeshAtlasBaker.swift */,
 			);
 			path = MeshExplorer;
+			sourceTree = "<group>";
+		};
+		A1000000000000000000E01A /* Debug */ = {
+			isa = PBXGroup;
+			children = (
+				A100000000000000000000B36 /* DebugMode.swift */,
+				A100000000000000000000B37 /* DebugLog.swift */,
+				A100000000000000000000B38 /* ThermalObserver.swift */,
+				A100000000000000000000B39 /* MetalDebug.swift */,
+				A100000000000000000000B3A /* ArtifactDumper.swift */,
+				A100000000000000000000B3B /* BakeDiagnostics.swift */,
+				A100000000000000000000B3C /* DebugHUD.swift */,
+				A100000000000000000000B3D /* SyntheticBakeScene.swift */,
+			);
+			path = Debug;
 			sourceTree = "<group>";
 		};
 		A1000000000000000000E016 /* Resources */ = {
@@ -373,6 +405,14 @@
 				A1000000000000000000102D /* CoverageMaskView.swift in Sources */,
 				A1000000000000000000102E /* TrackingChip.swift in Sources */,
 				A1000000000000000000102F /* CaptureSettings.swift in Sources */,
+				A10000000000000000001036 /* DebugMode.swift in Sources */,
+				A10000000000000000001037 /* DebugLog.swift in Sources */,
+				A10000000000000000001038 /* ThermalObserver.swift in Sources */,
+				A10000000000000000001039 /* MetalDebug.swift in Sources */,
+				A1000000000000000000103A /* ArtifactDumper.swift in Sources */,
+				A1000000000000000000103B /* BakeDiagnostics.swift in Sources */,
+				A1000000000000000000103C /* DebugHUD.swift in Sources */,
+				A1000000000000000000103D /* SyntheticBakeScene.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
