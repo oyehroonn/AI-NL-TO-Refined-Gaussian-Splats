@@ -30,10 +30,19 @@ import simd
 final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate {
 
     @Published var isEnabled: Bool = true {
-        didSet {
-            for node in trackedNodes.values {
-                node.opacity = isEnabled ? 1.0 : 0.0
-            }
+        didSet { refreshOverlayOpacities() }
+    }
+
+    /// Re-apply opacity to every tracked node based on `isEnabled` AND the
+    /// anchor's current texture quality. An anchor below
+    /// `minTextureQualityForOverlay` is hidden even when the overlay is
+    /// globally on — showing a "white blur" claim for an area we don't
+    /// actually have a usable photo of is worse than showing nothing.
+    private func refreshOverlayOpacities() {
+        for (id, node) in trackedNodes {
+            let quality = textureQualityByAnchor[id] ?? 0
+            let show = isEnabled && quality >= minTextureQualityForOverlay
+            node.opacity = show ? 1.0 : 0.0
         }
     }
 
@@ -53,6 +62,7 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         anchorsByID.removeAll()
         snapshotsByAnchor.removeAll()
         anchorCentroidByID.removeAll()
+        textureQualityByAnchor.removeAll()
         anchorCount = 0
         latestSnapshot = nil
     }
@@ -117,10 +127,33 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
     func snapshotForExplorer() -> [ExplorerSnapshot] {
         var out: [ExplorerSnapshot] = []
         out.reserveCapacity(trackedNodes.count)
+        var skippedLowQuality = 0
         for (id, anchor) in anchorsByID {
+            // Skip anchors whose best snapshot couldn't project most of
+            // the mesh into a real UV range. Including them would render
+            // as a black distorted patch in the explorer (sentinel UVs
+            // hit the grey-fallback fragment-modifier path). Better to
+            // have a hole in the explorer's visible mesh than a smear —
+            // the physics body still covers the missing area via the
+            // coarse-welded mesh built from ALL anchors, so the user
+            // can still walk through that space, they just won't see it.
+            let quality = textureQualityByAnchor[id] ?? 0
+            guard quality >= minTextureQualityForOverlay else {
+                skippedLowQuality += 1
+                continue
+            }
             guard let snap = bestSnapshot(forAnchorID: id) else { continue }
             guard let owned = ownGeometryFromAnchor(anchor: anchor, snapshot: snap) else { continue }
             out.append(owned)
+        }
+        if skippedLowQuality > 0 {
+            // Audit signal for the Debug log — tells us how many anchors
+            // the user scanned without ever framing well. A high count
+            // means coverage was thin; downstream layers can guide the
+            // user to retake those regions.
+            NSLog("[TexturedMeshRenderer] snapshotForExplorer skipped " +
+                  "\(skippedLowQuality) anchors below quality threshold " +
+                  "\(minTextureQualityForOverlay)")
         }
         return out
     }
@@ -246,6 +279,25 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
     /// pump (~10 Hz × N anchors × M vertices ≈ a few μs but adds up).
     /// Refreshed on every didAdd / didUpdate.
     private var anchorCentroidByID: [UUID: SIMD3<Float>] = [:]
+
+    /// Per-anchor textured-UV coverage in [0, 1]. Computed by
+    /// `makeTexturedGeometry` as (validUVCount / vertCount). An anchor
+    /// whose best snapshot was taken from a tangential angle has most
+    /// vertices projecting outside the texture frustum → sentinel UVs
+    /// → low quality. We use this to:
+    ///   1. Hide the live overlay (set opacity to 0) so the user doesn't
+    ///      see a misleading "white blur" claiming an area is textured
+    ///      when it actually has nothing useful baked.
+    ///   2. Filter snapshotForExplorer so the explorer never receives
+    ///      anchors that would render as a black distorted patch.
+    /// Refreshed on every didAdd / didUpdate.
+    private var textureQualityByAnchor: [UUID: Float] = [:]
+
+    /// Threshold below which an anchor is considered "not actually
+    /// textured" — fewer than this fraction of its vertices project
+    /// into the chosen snapshot's [0.05, 0.95] inset.
+    private let minTextureQualityForOverlay: Float = 0.30
+
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
 
     /// Texture target side length. 512 is plenty for the hand-held overlay
@@ -265,6 +317,12 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         /// variance and clipped to [0, 1] so it can be folded into a score
         /// product directly.
         let sharpness: Float
+        /// Mean luminance in [0, 1], Rec.709 weighted. Computed once in
+        /// makeSnapshot via CIAreaAverage. Used by `score` to penalise
+        /// blown-out (mean ≈ 1.0) and crushed-black (mean ≈ 0.0) frames,
+        /// which is what was happening near bright lights and producing
+        /// the visible seam in the explorer.
+        let meanLuminance: Float
         /// Wall-clock timestamp the snapshot was captured at, for debugging
         /// and for tie-breaking between candidate snapshots with similar
         /// scores (prefer the more recent one — captures latest exposure).
@@ -362,8 +420,44 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         // against each anchor's cached centroid and let the per-anchor
         // ring buffer decide whether to keep it. ~50 anchors × O(1) work
         // each at 10 Hz = ~500 cheap evaluations/sec — negligible.
+        //
+        // Phase D — the "stuck band" fix. After `consider` mutates the
+        // ring buffer, check whether the BEST slot changed for this
+        // anchor. If yes, re-install the textured geometry so the new
+        // UV layout (computed against the new best snapshot's matrices)
+        // actually reaches the SCN node. Without this step the ring
+        // buffer accumulates better and better snapshots but the
+        // rendered material stays frozen with the original layout —
+        // exactly the bug the user reported as vertical bands that
+        // never fill in.
+        //
+        // Why this fix is needed at all: ARKit stops calling didUpdate
+        // on a mesh anchor once its geometry stabilises. `installTextured-
+        // Mesh` is normally the path that re-bakes textures, but it
+        // only runs from didAdd/didUpdate. A stable anchor whose ring
+        // buffer keeps improving via the pump above had no way to
+        // promote those improvements to the renderer — until now.
         for (id, _) in anchorCentroidByID {
+            let oldBestTimestamp = bestSnapshot(forAnchorID: id)?.timestamp
             consider(snapshot: snap, forAnchorID: id)
+            let newBest = bestSnapshot(forAnchorID: id)
+            // Compare by timestamp — each ARFrame has a unique timestamp,
+            // so this is an identity check.
+            let bestChanged = newBest?.timestamp != oldBestTimestamp
+            guard bestChanged,
+                  let node = trackedNodes[id],
+                  let anchor = anchorsByID[id] else {
+                continue
+            }
+            // Re-bake. installTexturedMesh re-runs UV projection against
+            // the new best snapshot, rebuilds the SCN geometry + material,
+            // and re-applies the Phase B quality-aware opacity gate. The
+            // band fills in (or, for the rare-but-legitimate case where
+            // a snapshot won on score but produces worse UV coverage,
+            // the band stays hidden under Phase B's threshold — which is
+            // still better than the prior behavior of pretending it was
+            // textured).
+            installTexturedMesh(into: node, from: anchor, isNew: false)
         }
     }
 
@@ -402,7 +496,7 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
 
     /// Score a snapshot's suitability as the texture for an anchor.
     ///
-    /// The product of three factors, each in [0, 1]:
+    /// The product of FOUR factors, each in [0, 1]:
     ///  - **view-angle**: cosine of the angle between camera forward and
     ///    direction-to-anchor. 1.0 = camera pointed straight at anchor,
     ///    0.0 = perpendicular or behind. We clamp to 0 below; a camera
@@ -411,8 +505,15 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
     ///    have higher pixel density per face → sharper texture.
     ///  - **sharpness**: BlurDetector value normalised to [0, 1]. A motion-
     ///    blurred frame can never beat a sharp one.
+    ///  - **exposure**: 1.0 at mean-luma 0.5, falling off linearly to 0
+    ///    at 0.0 (crushed black) or 1.0 (blown-out white). Floored at
+    ///    0.1 so a usable-but-bright frame can still win if it's the
+    ///    only candidate. This is the change that fixes the "seam near
+    ///    bright lights" symptom — a sharp washed-out photo of a wall
+    ///    next to a lamp used to beat a mid-exposed photo from a step
+    ///    back, baking the seam into the explorer.
     ///
-    /// All three must be reasonable; one weak factor zeros the score.
+    /// All four must be reasonable; one weak factor near-zeros the score.
     private func score(
         snapshot snap: CameraSnapshot,
         anchorCentroid centroid: SIMD3<Float>
@@ -425,7 +526,13 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         let viewScore: Float = max(0, dot)              // [0, 1]
         let distScore: Float = min(1, 2.0 / max(dist, 0.5))  // 1 at <0.5m
         let sharpScore: Float = min(1, max(0, snap.sharpness))
-        return viewScore * distScore * sharpScore
+        // Triangle window centred at 0.5 luma → mid-exposure wins.
+        // 0.1 floor so a slightly bright frame still beats nothing.
+        let exposureScore: Float = max(
+            0.1,
+            1.0 - 2.0 * abs(snap.meanLuminance - 0.5)
+        )
+        return viewScore * distScore * sharpScore * exposureScore
     }
 
     /// Consider a snapshot as a candidate for an anchor: score it, insert
@@ -492,6 +599,36 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         }
         let image = UIImage(cgImage: cg)
 
+        // Mean luminance — CIAreaAverage produces a 1×1 pixel containing
+        // the average colour of `ci`. Render to 4 bytes and compute
+        // Rec.709 luma in [0, 1]. Cheap (~1-2 ms) because we render at
+        // 1×1 and CI fuses the reduction onto the GPU. Used by `score`
+        // to penalise blown-out and crushed frames so the candidate
+        // ring-buffer prefers mid-exposure photos. Without this, a
+        // sharply-focused near-white frame next to a light bulb beats
+        // a mid-exposure photo of the same surface and the explorer
+        // shows a visible seam at the light's edge.
+        let meanLuminance: Float = {
+            let avgFilter = CIFilter(name: "CIAreaAverage")
+            avgFilter?.setValue(ci, forKey: kCIInputImageKey)
+            avgFilter?.setValue(CIVector(cgRect: ci.extent),
+                                forKey: "inputExtent")
+            guard let avg = avgFilter?.outputImage else { return 0.5 }
+            var pixel: [UInt8] = [0, 0, 0, 0]
+            ciContext.render(
+                avg,
+                toBitmap: &pixel,
+                rowBytes: 4,
+                bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                format: .RGBA8,
+                colorSpace: CGColorSpaceCreateDeviceRGB()
+            )
+            let r = Float(pixel[0]) / 255.0
+            let g = Float(pixel[1]) / 255.0
+            let b = Float(pixel[2]) / 255.0
+            return 0.2126 * r + 0.7152 * g + 0.0722 * b
+        }()
+
         // ARKit camera matrices for landscape sensor orientation. We use
         // landscapeRight (the natural ARKit pixel-buffer orientation) so
         // matrices align with the un-rotated image we just baked.
@@ -525,6 +662,7 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
             cameraPosition: camPos,
             cameraForward: camFwd,
             sharpness: sharpness,
+            meanLuminance: meanLuminance,
             timestamp: frame.timestamp
         )
     }
@@ -565,20 +703,36 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
 
         // Pick the highest-scoring candidate and bake it.
         if let snap = bestSnapshot(forAnchorID: id),
-           let geom = makeTexturedGeometry(from: anchor, snapshot: snap) {
+           let result = makeTexturedGeometry(from: anchor, snapshot: snap) {
             let material = makeTexturedMaterial(image: snap.image)
-            geom.materials = [material]
-            node.geometry = geom
+            result.geometry.materials = [material]
+            node.geometry = result.geometry
+            textureQualityByAnchor[id] = result.quality
         } else {
             // No snapshot yet (first second of capture before the pump has
             // fired). Show the translucent teal fallback so the user sees
             // something; the next didUpdate will retro-fit a real texture.
+            //
+            // Quality = 0 here (no real UVs). The opacity gate below will
+            // hide this node, so the user no longer sees the teal blur
+            // claiming a brand-new anchor is "already covered." The node
+            // becomes visible the moment a snapshot with reasonable
+            // projection coverage arrives via the next didUpdate.
             let geom = makeFlatGeometry(from: anchor)
             geom.materials = [makeFlatMaterial()]
             node.geometry = geom
+            textureQualityByAnchor[id] = 0
         }
 
-        node.opacity = isEnabled ? 1.0 : 0.0
+        // Quality-aware opacity. An anchor with mostly-sentinel UVs would
+        // sample the texture's clamped top-left pixel everywhere and look
+        // like a white smear, lying to the user that this surface is
+        // captured. We hide it instead — see comment on
+        // `textureQualityByAnchor`.
+        let quality = textureQualityByAnchor[id] ?? 0
+        let showOverlay = isEnabled && quality >= minTextureQualityForOverlay
+        node.opacity = showOverlay ? 1.0 : 0.0
+
         if isNew || trackedNodes[id] == nil {
             trackedNodes[id] = node
             anchorCount = trackedNodes.count
@@ -593,10 +747,15 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
     /// texture coordinates** computed by projecting each world-space vertex
     /// through the snapshot camera. Returns nil if the projection produced
     /// no valid UVs (e.g. snapshot pose data was malformed).
+    ///
+    /// Returns `(geometry, textureQuality)` where `textureQuality` is the
+    /// fraction of vertices that projected INSIDE the [0.05, 0.95] inset
+    /// (i.e. got a real UV, not the sentinel). Caller uses this to gate
+    /// node opacity + explorer export — see `textureQualityByAnchor`.
     private func makeTexturedGeometry(
         from anchor: ARMeshAnchor,
         snapshot: CameraSnapshot
-    ) -> SCNGeometry? {
+    ) -> (geometry: SCNGeometry, quality: Float)? {
         let g = anchor.geometry
         let vertCount = g.vertices.count
         guard vertCount > 0 else { return nil }
@@ -635,6 +794,7 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
         let viewProj = simd_mul(snapshot.projectionMatrix, snapshot.viewMatrix)
         let sentinel = SIMD2<Float>(-1, -1)
         var uvs = [SIMD2<Float>](repeating: sentinel, count: vertCount)
+        var validUVCount = 0
         // Read the vertex buffer host-side. Apple's mesh anchors use shared
         // memory, so .contents() reads back without a Metal blit.
         let vBase = g.vertices.buffer.contents().advanced(by: g.vertices.offset)
@@ -658,7 +818,11 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
             // edge pixels, which smear visually. Sentinel them too.
             if u < 0.05 || u > 0.95 || v < 0.05 || v > 0.95 { continue }
             uvs[i] = SIMD2(u, v)
+            validUVCount += 1
         }
+        let quality: Float = vertCount > 0
+            ? Float(validUVCount) / Float(vertCount)
+            : 0
 
         let uvData = uvs.withUnsafeBufferPointer { Data(buffer: $0) }
         let uvSource = SCNGeometrySource(
@@ -681,7 +845,7 @@ final class TexturedMeshRenderer: NSObject, ObservableObject, ARSCNViewDelegate 
             bytesPerIndex: g.faces.bytesPerIndex
         )
 
-        return SCNGeometry(sources: sources, elements: [element])
+        return (SCNGeometry(sources: sources, elements: [element]), quality)
     }
 
     /// Fallback geometry without UVs — used until the first snapshot
