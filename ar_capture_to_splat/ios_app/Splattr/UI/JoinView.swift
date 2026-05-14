@@ -18,6 +18,9 @@ struct JoinView: View {
     @State private var appearAnim = false
     @State private var cadence: CaptureCadence = CaptureSettings.cadence()
     @State private var tier: Tier = CaptureSettings.tier()
+    @AppStorage(DebugModeStorageKey.enabled) private var debugOn: Bool = false
+    @State private var syntheticRunning = false
+    @State private var syntheticResult: String? = nil
 
     init(descriptor: SessionDescriptor, host: String) {
         self.descriptor = descriptor
@@ -35,6 +38,7 @@ struct JoinView: View {
                 cadenceCard
                 tierCard
                 tipsCard
+                if debugOn { debugCard }
                 Spacer(minLength: 12)
             }
             .padding(Theme.Layout.screenPadding)
@@ -63,8 +67,23 @@ struct JoinView: View {
                 Text("CONNECTED")
                     .font(Theme.Font.caption(11)).tracking(2.0)
                     .foregroundStyle(Theme.Color.success)
+                    // Hidden 1.2s long-press toggles the on-phone debug
+                    // surface (HUD, file log, artifact dumper). Intentionally
+                    // undiscoverable to avoid clutter for non-dev users.
+                    .onLongPressGesture(minimumDuration: 1.2) {
+                        debugOn.toggle()
+                        DebugLog.shared.info(
+                            "debugmode",
+                            "toggled via JoinView pill → \(debugOn ? "ON" : "OFF")"
+                        )
+                    }
                 Circle().fill(Theme.Color.success).frame(width: 6, height: 6)
                     .shadow(color: Theme.Color.success.opacity(0.8), radius: 6)
+                if debugOn {
+                    Text("DEBUG")
+                        .font(Theme.Font.caption(10)).tracking(1.6)
+                        .foregroundStyle(Color(red: 0.95, green: 0.78, blue: 0.30))
+                }
                 Spacer()
             }
             DisplayHeading(title: descriptor.displayVideoName,

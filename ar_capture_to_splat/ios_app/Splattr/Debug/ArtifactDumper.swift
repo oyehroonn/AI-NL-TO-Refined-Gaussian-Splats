@@ -39,7 +39,6 @@ import CoreGraphics
 import Foundation
 import ImageIO
 import Metal
-import MobileCoreServices
 import UIKit
 import UniformTypeIdentifiers
 
