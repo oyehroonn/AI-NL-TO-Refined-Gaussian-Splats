@@ -93,7 +93,7 @@ struct MeshExplorerView: View {
     }
 
     private var topBar: some View {
-        HStack {
+        HStack(spacing: 10) {
             Text("EXPLORE MODE")
                 .font(.system(size: 11, weight: .heavy)).tracking(2.0)
                 .foregroundStyle(.white.opacity(0.85))
@@ -101,6 +101,7 @@ struct MeshExplorerView: View {
                 .background(Capsule().fill(.ultraThinMaterial))
                 .overlay(Capsule().stroke(.white.opacity(0.25), lineWidth: 0.6))
             Spacer()
+            flyWalkToggle
             Button {
                 controller.stopMovementLoop()
                 dismiss()
@@ -117,6 +118,34 @@ struct MeshExplorerView: View {
         .padding(.top, 60)
     }
 
+    /// FLY / WALK toggle. One tap. Reads + writes controller.mode.
+    /// FLY  = no-clip, electric-blue fill so the active state is obvious.
+    /// WALK = physics on, halo-amber fill matching the in-app accent.
+    private var flyWalkToggle: some View {
+        let isFly = controller.mode == .fly
+        let activeColor = isFly
+            ? Color(red: 0.23, green: 0.48, blue: 1.00)   // electric blue
+            : Color(red: 0.95, green: 0.78, blue: 0.30)   // halo amber
+        return Button {
+            controller.setMode(isFly ? .walk : .fly)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: isFly
+                      ? "paperplane.fill"
+                      : "figure.walk")
+                    .font(.system(size: 11, weight: .semibold))
+                Text(isFly ? "FLY" : "WALK")
+                    .font(.system(size: 11, weight: .heavy)).tracking(1.6)
+            }
+            .foregroundStyle(.black)
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            .background(Capsule().fill(activeColor))
+            .overlay(Capsule().stroke(activeColor.opacity(0.5),
+                                      lineWidth: 0.6))
+        }
+        .buttonStyle(.plain)
+    }
+
     private var bottomBar: some View {
         HStack {
             Text(String(format: "POS  %+.1f, %+.1f, %+.1f",
@@ -128,7 +157,11 @@ struct MeshExplorerView: View {
                 .padding(.horizontal, 12).padding(.vertical, 6)
                 .background(Capsule().fill(.ultraThinMaterial))
             Spacer()
-            jumpButton
+            // Jump only makes sense in WALK — FLY moves up/down by
+            // pitching the look pad and pushing forward.
+            if controller.mode == .walk {
+                jumpButton
+            }
         }
         .padding(.horizontal, 18)
         .padding(.bottom, 38)
