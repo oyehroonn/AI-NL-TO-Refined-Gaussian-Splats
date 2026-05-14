@@ -303,6 +303,29 @@ enum MeshAtlasBaker {
             totalElapsed: CFAbsoluteTimeGetCurrent() - tStart
         )
 
+        // Summary log + HUD push.
+        DebugLog.shared.info(
+            "bake",
+            "done: " +
+            "tris=\(triCount) " +
+            "withView=\(withView)/\(triCount) " +
+            "(\(String(format: "%.1f%%", Double(withView) / Double(max(1, triCount)) * 100))) " +
+            "atlases=\(atlasPlans.count) " +
+            "totalMs=\(String(format: "%.0f", (CFAbsoluteTimeGetCurrent() - tStart) * 1000))"
+        )
+        Task { @MainActor in
+            BakeMetrics.shared.totalTriangles = triCount
+            BakeMetrics.shared.totalAtlases = atlasPlans.count
+        }
+        ArtifactDumper.dumpText(
+            "BakeStats triangles=\(triCount) withView=\(withView) " +
+            "atlases=\(atlasPlans.count) " +
+            "weldMs=\(String(format: "%.0f", stats.weldElapsed * 1000)) " +
+            "bestViewMs=\(String(format: "%.0f", stats.bestViewElapsed * 1000)) " +
+            "bakeMs=\(String(format: "%.0f", stats.bakeElapsed * 1000)) " +
+            "totalMs=\(String(format: "%.0f", stats.totalElapsed * 1000))\n",
+            as: "bake_stats")
+
         return BakedMesh(
             chunks: bakedChunks,
             // Physics: coarse mesh (8 cm). MUST NOT use the fine welded
